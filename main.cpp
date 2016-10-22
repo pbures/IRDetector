@@ -45,12 +45,12 @@ volatile uint8_t started = 0;
 #define TIMER_MAX 65535
 
 enum TimeGap {
-	OVER_BHIGH_GAP, OVER_BLOW_GAP, OVER_IMPULS_GAP
+	G9P0MS = 5, G4P5MS = 4, G1P2MS = 3, G0P5MS = 2
 };
 
 enum DbgLed {
-	ISRDBG,   //PD7 (pin 13)
 	GREEN,    //PD5 (pin 11)
+	ISRDBG,   //PD7 (pin 13)
 	RCVLED1,  //PB1 (pin 15) (CH0)
 	RCVLED2,  //PB2 (pin 16) (CH1)
 	RCVLED3,  //PB0 (pin 14) (CH2)
@@ -208,26 +208,26 @@ ISR(PCINT1_vect) {
 
 	uint8_t pinc = ~PINC;
 	uint32_t timeUs[3] = { 0L, 0L, 0L };
-
 	uint8_t processed[3] = { 0, 0, 0 };
+	TimeGap timeGap[3];
 
 	/* TODO: Make sure we are not losing any pin change while we are in this ISR.
 	 For now: go over all channels twice to check if some has changed during processing.
 	 More intelligent is to observe the PCIFR register and check on PCIF1.
 	 */
-	for (uint8_t t = 0; t < 2; t++) {
+	do {
 		pinc = ~PINC;
+
+		if (PCIFR & (1<<PCIF1)) {
+			PCIFR |= (1<<PCIF1);
+		}
+
 		for (uint8_t ch = START_CHANNEL; ch < NUM_CHANNELS; ch++) {
-
-
 			if (processed[ch])
 				continue;
 
-
 			if (!CHNG(rcvPin[ch]))
 				continue;
-
-
 
 			if (pinc & (1 << rcvPin[ch]))
 				dbgLed(rcvSig[ch], 1);
@@ -242,6 +242,15 @@ ISR(PCINT1_vect) {
 				ticks = TCNT1;
 				overflows++;
 			}
+
+//			if (overflows > 1) {
+//				timeGap = G9P0MS;
+//			} else if (overflows == 1) {
+//				if((ticks / 8) - (timerReg[ch] / 8) > 1000){
+//
+//				}
+//
+//			}
 
 			/* Compute the time in microseconds */
 			timeUs[ch] = ((overflows * 8192) + (ticks / 8) - (timerReg[ch] / 8));
@@ -268,7 +277,7 @@ ISR(PCINT1_vect) {
 
 			case BURST:
 				if (HI2LO(rcvPin[ch])) {
-					if (timeUs[ch] > 8900) {
+					if (timeUs[ch] > 9000) {
 						status[ch] = BURST;
 					} else {
 						status[ch] = IDLE;
@@ -295,7 +304,7 @@ ISR(PCINT1_vect) {
 						status[ch] = BURST;
 					} else {
 						status[ch] = RECV;
-						if (timeUs[ch] > 660) { //Should be 560us
+						if (timeUs[ch] > 900) { //Should be 560us
 #ifdef STORE_DATA
 							myByte[ch] |= (uint32_t) (((uint32_t) 1) << bitPtr[ch]);
 #endif
@@ -309,16 +318,22 @@ ISR(PCINT1_vect) {
 
 			if (bitPtr[ch] >= 32) {
 #ifdef STORE_DATA
-				commands[ch][commandsPtr[ch]] = (uint8_t) ((myByte[ch] >> 16) & 0xFF);
-				commandsPtr[ch] = commandsPtr[ch] + 1;
+				uint8_t cmd = (uint8_t) ((myByte[ch] >> 16) & 0xFF);
+				uint8_t cmdNeg = (uint8_t) ((myByte[ch] >> 24) & 0xFF);
 
+				if ((cmd ^ cmdNeg) == 0xFF) {
+					commands[ch][commandsPtr[ch]] = cmd;
+					commandsPtr[ch] = commandsPtr[ch] + 1;
+				}
+
+#endif
 				myByte[ch] = 0;
 				bitPtr[ch] = 0;
 				status[ch] = IDLE;
 			}
 		}
-	}
-#endif
+	} while (PCIFR & (1<<PCIF1));
+
 	irrcPins = ~PINC;
 
 }
