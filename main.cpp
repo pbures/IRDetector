@@ -24,40 +24,56 @@
 #define RCVLED2_PIN     PINB
 #define RCVLED2_BIT     PB2
 
+#define RCVLED3_DDR     DDRB
+#define RCVLED3_PORT    PORTB
+#define RCVLED3_PIN     PINB
+#define RCVLED3_BIT     PB0
+
+#define START_CHANNEL 0
+#define NUM_CHANNELS 3
+
 #define SET_INPUT_MODE(ddr,bit) ddr &= ~(1<<bit)
 #define SET_OUTPUT_MODE(ddr,bit) ddr |= (1<<bit)
 #define SET_HIGH(port,bit) port |= (1<<bit)
 #define SET_LOW(port,bit) port &= ~(1<<bit)
 
-int8_t volatile timerOverflowCnt[2] = { 0, 0 };
-uint16_t volatile timerReg[2] = { 0, 0 };
+int8_t volatile timerOverflowCnt[3] = { 0, 0, 0 };
+uint16_t volatile timerReg[3] = { 0, 0, 0 };
 volatile uint8_t irrcPins = 0;
 volatile uint8_t started = 0;
 
 #define TIMER_MAX 65535
 
 enum TimeGap {
-	OVER_BHIGH_GAP, OVER_BLOW_GAP, OVER_IMPULS_GAP, NONE
+	OVER_BHIGH_GAP, OVER_BLOW_GAP, OVER_IMPULS_GAP
 };
 
 enum DbgLed {
-	RED, GREEN, BLUE, YELLOW, RCVLED1, RCVLED2, GPDBG, ALL
+	ISRDBG,   //PD7 (pin 13)
+	GREEN,    //PD5 (pin 11)
+	RCVLED1,  //PB1 (pin 15) (CH0)
+	RCVLED2,  //PB2 (pin 16) (CH1)
+	RCVLED3,  //PB0 (pin 14) (CH2)
+	GPDBG1,   //PD2 (pin  4)
+	GPDBG2,   //PD3 (pin  5)
+	GPDBG3,   //PD4 (pin  6)
+	ALL, NONE
 };
 
 enum Status {
 	IDLE, BURST, RECV
 };
 
-Status volatile status[2] = { IDLE, IDLE };
-uint8_t rcvPin[2] = { PC1, PC2 };
+Status volatile status[3] = { IDLE, IDLE, IDLE };
+uint8_t rcvPin[3] = { PC1, PC2, PC3 };
 
 #define STORE_DATA
 #define COMMANDS_BUFLEN 256
-uint32_t volatile myByte[2] = { 0x00, 0x00 };
-uint8_t volatile bitPtr[2] = { 0, 0 };
-uint8_t volatile commands[2][COMMANDS_BUFLEN];
-uint8_t volatile commandsPtr[2] = { 0, 0 };
-uint8_t volatile commandsReadPtr[2] = { 0, 0 };
+uint32_t volatile myByte[3] = { 0x00, 0x00, 0x00 };
+uint8_t volatile bitPtr[3] = { 0, 0, 0 };
+uint8_t volatile commands[3][COMMANDS_BUFLEN];
+uint8_t volatile commandsPtr[3] = { 0, 0, 0 };
+uint8_t volatile commandsReadPtr[3] = { 0, 0, 0 };
 
 void printCommandsBuffer(uint8_t ch) {
 	printString("Cmd buf ");
@@ -90,12 +106,14 @@ void printCommandsBuffer(uint8_t ch) {
  * <|||9ms|||_4.5ms_><<LSBaddr1><MSBaddr1>><<LSBaddr2><MSBaddr2>><<LSBcmd1....>
  */
 
-DbgLed rcvHiCh[2] = { RED, GREEN };
-DbgLed rcvOne[2] = { BLUE, YELLOW };
-DbgLed rcvSig[2] = { RCVLED1, RCVLED2 };
+DbgLed rcvHiCh[3] = { NONE, NONE, NONE };
+DbgLed rcvOne[3] = { GPDBG1, GPDBG2, GPDBG3 };
+DbgLed rcvSig[3] = { RCVLED1, RCVLED2, RCVLED3 };
 
 void dbgLed(DbgLed led, uint8_t dir) {
 	switch (led) {
+	case NONE:
+		break;
 	case GREEN:
 		if (dir)
 			SET_HIGH(PORTD, PD5);
@@ -103,26 +121,13 @@ void dbgLed(DbgLed led, uint8_t dir) {
 			SET_LOW(PORTD, PD5);
 		break;
 
-	case RED:
+	case ISRDBG:
 		if (dir)
 			SET_HIGH(PORTD, PD7);
 		else
 			SET_LOW(PORTD, PD7);
 		break;
 
-	case BLUE:
-		if (dir)
-			SET_HIGH(PORTD, PD3);
-		else
-			SET_LOW(PORTD, PD3);
-		break;
-
-	case YELLOW:
-		if (dir)
-			SET_HIGH(PORTD, PD2);
-		else
-			SET_LOW(PORTD, PD2);
-		break;
 
 	case RCVLED1:
 		if (dir)
@@ -138,7 +143,28 @@ void dbgLed(DbgLed led, uint8_t dir) {
 			SET_LOW(RCVLED2_PORT, RCVLED2_BIT);
 		break;
 
-	case GPDBG:
+	case RCVLED3:
+		if (dir)
+			SET_HIGH(RCVLED3_PORT, RCVLED3_BIT);
+		else
+			SET_LOW(RCVLED3_PORT, RCVLED3_BIT);
+		break;
+
+	case GPDBG1:
+		if (dir)
+			SET_HIGH(PORTD, PD2);
+		else
+			SET_LOW(PORTD, PD2);
+		break;
+
+	case GPDBG2:
+		if (dir)
+			SET_HIGH(PORTD, PD3);
+		else
+			SET_LOW(PORTD, PD3);
+		break;
+
+	case GPDBG3:
 		if (dir)
 			SET_HIGH(PORTD, PD4);
 		else
@@ -177,15 +203,13 @@ inline void resetTime(uint8_t ch) {
 #define HI2LO(bit) (( (irrcPins & (1 << bit))) && !(pinc & (1 << bit)))
 #define CHNG(bit) ((irrcPins ^ pinc) & (1<<bit))
 
-#define NUM_CHANNELS 2
-#define START_CHANNEL 0
 
 ISR(PCINT1_vect) {
 
 	uint8_t pinc = ~PINC;
-	uint32_t timeUs[2] = { 0L, 0L };
+	uint32_t timeUs[3] = { 0L, 0L, 0L };
 
-	uint8_t processed[2] = { 0, 0 };
+	uint8_t processed[3] = { 0, 0, 0 };
 
 	/* TODO: Make sure we are not losing any pin change while we are in this ISR.
 	 For now: go over all channels twice to check if some has changed during processing.
@@ -193,13 +217,17 @@ ISR(PCINT1_vect) {
 	 */
 	for (uint8_t t = 0; t < 2; t++) {
 		pinc = ~PINC;
-		for (uint8_t ch = START_CHANNEL; ch < 2; ch++) {
+		for (uint8_t ch = START_CHANNEL; ch < NUM_CHANNELS; ch++) {
+
 
 			if (processed[ch])
 				continue;
 
+
 			if (!CHNG(rcvPin[ch]))
 				continue;
+
+
 
 			if (pinc & (1 << rcvPin[ch]))
 				dbgLed(rcvSig[ch], 1);
@@ -229,33 +257,25 @@ ISR(PCINT1_vect) {
 				continue;
 
 			processed[ch] = 1;
-			dbgLed(GPDBG, 1);
-			switch (status[ch]) {
+			dbgLed(rcvOne[ch], 0);
 
+			switch (status[ch]) {
 			case IDLE:
-				dbgLed(rcvHiCh[ch], 0);
-				dbgLed(rcvOne[ch], 0);
 				if (LO2HI(rcvPin[ch])) {
-					dbgLed(rcvHiCh[ch], 0);
 					status[ch] = BURST;
-					dbgLed(GPDBG, 0);
 				}
 				break;
 
 			case BURST:
-				dbgLed(GPDBG, 0);
 				if (HI2LO(rcvPin[ch])) {
-					dbgLed(rcvHiCh[ch], 0);
 					if (timeUs[ch] > 8900) {
 						status[ch] = BURST;
 					} else {
 						status[ch] = IDLE;
 					}
 				} else {
-					dbgLed(rcvOne[ch], 0);
 					if (timeUs[ch] > 4400) {
 						status[ch] = RECV;
-						dbgLed(rcvHiCh[ch], 1);
 					} else {
 						status[ch] = BURST;
 					}
@@ -265,9 +285,6 @@ ISR(PCINT1_vect) {
 			case RECV:
 
 				if (HI2LO(rcvPin[ch])) {
-					dbgLed(rcvHiCh[ch], 0);
-					dbgLed(rcvOne[ch], 0);
-
 					if (timeUs[ch] > 9000) {
 						status[ch] = BURST;
 					} else { //Should be 560us
@@ -276,10 +293,8 @@ ISR(PCINT1_vect) {
 				} else {
 					if (timeUs[ch] > 4500) {
 						status[ch] = BURST;
-						dbgLed(GPDBG, 1);
 					} else {
 						status[ch] = RECV;
-						dbgLed(rcvHiCh[ch], 1);
 						if (timeUs[ch] > 660) { //Should be 560us
 #ifdef STORE_DATA
 							myByte[ch] |= (uint32_t) (((uint32_t) 1) << bitPtr[ch]);
@@ -301,11 +316,11 @@ ISR(PCINT1_vect) {
 				bitPtr[ch] = 0;
 				status[ch] = IDLE;
 			}
-			dbgLed(GPDBG, 0);
 		}
 	}
 #endif
 	irrcPins = ~PINC;
+
 }
 
 /* Count number of timer overflows, this tells us how many cycles passed */
@@ -314,6 +329,8 @@ ISR(TIMER1_OVF_vect) {
 		timerOverflowCnt[0]++;
 	if (timerOverflowCnt[1] < 127)
 		timerOverflowCnt[1]++;
+	if (timerOverflowCnt[2] < 127)
+		timerOverflowCnt[2]++;
 	TCNT1 = 0;
 }
 
@@ -340,9 +357,13 @@ void IRInit() {
 void initReceivers() {
 	SET_INPUT_MODE(DDRC, PC1);
 	SET_HIGH(PORTC, PC1);
+	SET_INPUT_MODE(DDRC, PC2);
+	SET_HIGH(PORTC, PC2);
+	SET_INPUT_MODE(DDRC, PC3);
+	SET_HIGH(PORTC, PC3);
 
 	PCICR |= (1 << PCIE1);
-	PCMSK1 |= ((1 << PCINT9) | (1 << PCINT10));
+	PCMSK1 |= ((1 << PCINT9) | (1 << PCINT10) | ( 1<< PCINT11));
 	irrcPins = ~PINC;
 }
 
@@ -350,18 +371,20 @@ int main() {
 
 	SET_OUTPUT_MODE(RCVLED1_DDR, RCVLED1_BIT);
 	SET_OUTPUT_MODE(RCVLED2_DDR, RCVLED2_BIT);
+	SET_OUTPUT_MODE(RCVLED3_DDR, RCVLED3_BIT);
+
 	DDRD |= ((1 << PD5) | (1 << PD7) | (1 << PD3) | (1 << PD2) | (1 << PD4));
 
-	dbgLed(RED, 1);
+	dbgLed(RCVLED1, 1);
 	_delay_ms(800);
-	dbgLed(RED, 0);
-	dbgLed(GREEN, 1);
+	dbgLed(RCVLED1, 0);
+	dbgLed(RCVLED2, 1);
 	_delay_ms(800);
-	dbgLed(GREEN, 0);
-	dbgLed(BLUE, 1);
+	dbgLed(RCVLED2, 0);
+	dbgLed(RCVLED3, 1);
 	_delay_ms(800);
+	dbgLed(RCVLED3, 0);
 	dbgLed(ALL, 0);
-	dbgLed(GPDBG, 0);
 
 	initUSART();
 	IRInit();
@@ -369,14 +392,13 @@ int main() {
 	initTimer();
 	initReceivers();
 
-	SET_OUTPUT_MODE(DDRB, PB0);
 	sei();
 
 	printString("Started!\r");
 
 	while (true) {
 
-		for (uint8_t ch = 0; ch < 2; ch++) {
+		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 			if (commandsReadPtr[ch] != commandsPtr[ch]) {
 				printCommandsBuffer(ch);
 			}
