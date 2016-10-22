@@ -217,8 +217,8 @@ ISR(PCINT1_vect) {
 	 */
 	do {
 		pinc = ~PINC;
-
 		if (PCIFR & (1<<PCIF1)) {
+			pinc = ~PINC;
 			PCIFR |= (1<<PCIF1);
 		}
 
