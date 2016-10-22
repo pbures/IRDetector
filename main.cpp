@@ -206,15 +206,11 @@ inline void resetTime(uint8_t ch) {
 
 ISR(PCINT1_vect) {
 
-	uint8_t pinc = ~PINC;
-	uint32_t timeUs[3] = { 0L, 0L, 0L };
-	uint8_t processed[3] = { 0, 0, 0 };
+	uint8_t pinc;
+	uint8_t processed = 0;
 	TimeGap timeGap[3];
 
-	/* TODO: Make sure we are not losing any pin change while we are in this ISR.
-	 For now: go over all channels twice to check if some has changed during processing.
-	 More intelligent is to observe the PCIFR register and check on PCIF1.
-	 */
+	dbgLed(ISRDBG,1);
 	do {
 		pinc = ~PINC;
 		if (PCIFR & (1<<PCIF1)) {
@@ -223,7 +219,7 @@ ISR(PCINT1_vect) {
 		}
 
 		for (uint8_t ch = START_CHANNEL; ch < NUM_CHANNELS; ch++) {
-			if (processed[ch])
+			if (processed & (1<<ch))
 				continue;
 
 			if (!CHNG(rcvPin[ch]))
@@ -243,29 +239,30 @@ ISR(PCINT1_vect) {
 				overflows++;
 			}
 
-//			if (overflows > 1) {
-//				timeGap = G9P0MS;
-//			} else if (overflows == 1) {
-//				if((ticks / 8) - (timerReg[ch] / 8) > 1000){
-//
-//				}
-//
-//			}
-
-			/* Compute the time in microseconds */
-			timeUs[ch] = ((overflows * 8192) + (ticks / 8) - (timerReg[ch] / 8));
+			/* Compute the time in microseconds, divide the ticks by 8 (>>3) as we are on 8MhZ */
+			uint16_t timeUs = ((overflows * 8192) + (ticks >> 3) - (timerReg[ch] >> 3));
 			resetTime(ch);
+
+			if (timeUs < 900) {
+				timeGap[ch] = G0P5MS;
+			} else if (timeUs < 4400) {
+				timeGap[ch] = G1P2MS;
+			} else if (timeUs < 8900) {
+				timeGap[ch] = G4P5MS;
+			} else {
+				timeGap[ch] = G9P0MS;
+			}
 		}
 
 		for (uint8_t ch = START_CHANNEL; ch < NUM_CHANNELS; ch++) {
 
-			if (processed[ch])
+			if (processed & (1<<ch))
 				continue;
 
 			if (!CHNG(rcvPin[ch]))
 				continue;
 
-			processed[ch] = 1;
+			processed |= (1<<ch);
 			dbgLed(rcvOne[ch], 0);
 
 			switch (status[ch]) {
@@ -277,13 +274,13 @@ ISR(PCINT1_vect) {
 
 			case BURST:
 				if (HI2LO(rcvPin[ch])) {
-					if (timeUs[ch] > 9000) {
+					if (timeGap[ch] == G9P0MS) {//(timeUs[ch] > 9000) {
 						status[ch] = BURST;
 					} else {
 						status[ch] = IDLE;
 					}
 				} else {
-					if (timeUs[ch] > 4400) {
+					if (timeGap[ch] >= G4P5MS) {//(timeUs[ch] > 4400) {
 						status[ch] = RECV;
 					} else {
 						status[ch] = BURST;
@@ -294,17 +291,17 @@ ISR(PCINT1_vect) {
 			case RECV:
 
 				if (HI2LO(rcvPin[ch])) {
-					if (timeUs[ch] > 9000) {
+					if (timeGap[ch] == G9P0MS) {//(timeUs[ch] > 9000) {
 						status[ch] = BURST;
 					} else { //Should be 560us
 						status[ch] = RECV;
 					}
 				} else {
-					if (timeUs[ch] > 4500) {
+					if (timeGap[ch] >= G4P5MS) {//(timeUs[ch] > 4500) {
 						status[ch] = BURST;
 					} else {
 						status[ch] = RECV;
-						if (timeUs[ch] > 900) { //Should be 560us
+						if (timeGap[ch] >= G1P2MS){//(timeUs[ch] > 900) {
 #ifdef STORE_DATA
 							myByte[ch] |= (uint32_t) (((uint32_t) 1) << bitPtr[ch]);
 #endif
@@ -335,17 +332,14 @@ ISR(PCINT1_vect) {
 	} while (PCIFR & (1<<PCIF1));
 
 	irrcPins = ~PINC;
-
+	dbgLed(ISRDBG,0);
 }
 
 /* Count number of timer overflows, this tells us how many cycles passed */
 ISR(TIMER1_OVF_vect) {
-	if (timerOverflowCnt[0] < 127)
-		timerOverflowCnt[0]++;
-	if (timerOverflowCnt[1] < 127)
-		timerOverflowCnt[1]++;
-	if (timerOverflowCnt[2] < 127)
-		timerOverflowCnt[2]++;
+	for(uint8_t ch=0;ch<NUM_CHANNELS;ch++){
+		if(timerOverflowCnt[ch] < 3) timerOverflowCnt[ch]++;
+	}
 	TCNT1 = 0;
 }
 
