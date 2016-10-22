@@ -9,6 +9,14 @@
 
 #include "USART/USART.h"
 
+#if F_CPU != 8000000
+#error "Please run the atmega chip at 8Mhz to reach the right timing."
+#endif
+
+//#define DECODE_IN_MAIN
+#define STORE_DATA
+#define NUM_CHANNELS 3
+
 #define TRC_DDR 	DDRD
 #define TRC_PORT 	PORTD
 #define TRC_PIN 	PIND
@@ -29,9 +37,6 @@
 #define RCVLED3_PIN     PINB
 #define RCVLED3_BIT     PB0
 
-#define START_CHANNEL 0
-#define NUM_CHANNELS 3
-
 #define SET_INPUT_MODE(ddr,bit) ddr &= ~(1<<bit)
 #define SET_OUTPUT_MODE(ddr,bit) ddr |= (1<<bit)
 #define SET_HIGH(port,bit) port |= (1<<bit)
@@ -42,15 +47,21 @@ uint16_t volatile timerReg[3] = { 0, 0, 0 };
 volatile uint8_t irrcPins = 0;
 volatile uint8_t started = 0;
 
+/* Encode here: Gap length,edge type (raising == MSB set to 1, falling == MSB set to 0) */
+#ifdef DECODE_IN_MAIN
+volatile uint8_t gaps[NUM_CHANNELS][256];
+volatile uint8_t gapsPtr=0;
+#endif
+
 #define TIMER_MAX 65535
 
 enum TimeGap {
-	G9P0MS = 5, G4P5MS = 4, G1P2MS = 3, G0P5MS = 2
+	G9P0MS = 3, G4P5MS = 2, G1P2MS = 1, G0P5MS = 0
 };
 
 enum DbgLed {
-	GREEN,    //PD5 (pin 11)
-	ISRDBG,   //PD7 (pin 13)
+	ISRDBG2,  //PD5 (pin 11)
+	ISRDBG1,  //PD7 (pin 13)
 	RCVLED1,  //PB1 (pin 15) (CH0)
 	RCVLED2,  //PB2 (pin 16) (CH1)
 	RCVLED3,  //PB0 (pin 14) (CH2)
@@ -67,9 +78,8 @@ enum Status {
 Status volatile status[3] = { IDLE, IDLE, IDLE };
 uint8_t rcvPin[3] = { PC1, PC2, PC3 };
 
-#define STORE_DATA
 #define COMMANDS_BUFLEN 256
-uint32_t volatile myByte[3] = { 0x00, 0x00, 0x00 };
+uint16_t volatile myByte[3] = { 0x00, 0x00, 0x00 };
 uint8_t volatile bitPtr[3] = { 0, 0, 0 };
 uint8_t volatile commands[3][COMMANDS_BUFLEN];
 uint8_t volatile commandsPtr[3] = { 0, 0, 0 };
@@ -87,13 +97,7 @@ void printCommandsBuffer(uint8_t ch) {
 	printString("\r");
 }
 
-/* TODO:
- * Make sure we are running on 8Mhz.
- */
-
-/* TODO:
- * Need to implement the state machine, recognizing zero/one/space of NEC protocol:
- *
+/*
  * The NEC protocol uses pulse distance encoding of the bits. Each pulse is a 560µs
  * long 38kHz carrier burst (about 21 cycles). A logical "1" takes 2.25ms to transmit,
  * while a logical "0" is only half of that, being 1.125ms. The recommended carrier
@@ -114,14 +118,14 @@ void dbgLed(DbgLed led, uint8_t dir) {
 	switch (led) {
 	case NONE:
 		break;
-	case GREEN:
+	case ISRDBG2:
 		if (dir)
 			SET_HIGH(PORTD, PD5);
 		else
 			SET_LOW(PORTD, PD5);
 		break;
 
-	case ISRDBG:
+	case ISRDBG1:
 		if (dir)
 			SET_HIGH(PORTD, PD7);
 		else
@@ -206,11 +210,15 @@ inline void resetTime(uint8_t ch) {
 
 ISR(PCINT1_vect) {
 
+	/* The ISR takes in general about 60us for each channel. We are reaching the limit,
+	 * and the status evaluation will have to be done outside the ISR.
+	 */
+
 	uint8_t pinc;
 	uint8_t processed = 0;
 	TimeGap timeGap[3];
 
-	dbgLed(ISRDBG,1);
+	dbgLed(ISRDBG1,1);
 	do {
 		pinc = ~PINC;
 		if (PCIFR & (1<<PCIF1)) {
@@ -218,7 +226,7 @@ ISR(PCINT1_vect) {
 			PCIFR |= (1<<PCIF1);
 		}
 
-		for (uint8_t ch = START_CHANNEL; ch < NUM_CHANNELS; ch++) {
+		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 			if (processed & (1<<ch))
 				continue;
 
@@ -252,15 +260,29 @@ ISR(PCINT1_vect) {
 			} else {
 				timeGap[ch] = G9P0MS;
 			}
+
+#ifdef DECODE_IN_MAIN
+			if (HI2LO(rcvPin[ch])){
+				gaps[ch][gapsPtr] = timeGap[ch];
+			} else {
+				gaps[ch][gapsPtr] = (timeGap[ch] | (1 << 7));
+			}
+			gapsPtr++;
+
+			processed |= (1<<ch);
+#endif
 		}
 
-		for (uint8_t ch = START_CHANNEL; ch < NUM_CHANNELS; ch++) {
+#ifndef DECODE_IN_MAIN
+		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 
 			if (processed & (1<<ch))
 				continue;
 
 			if (!CHNG(rcvPin[ch]))
 				continue;
+
+			dbgLed(ISRDBG2,1);
 
 			processed |= (1<<ch);
 			dbgLed(rcvOne[ch], 0);
@@ -303,7 +325,8 @@ ISR(PCINT1_vect) {
 						status[ch] = RECV;
 						if (timeGap[ch] >= G1P2MS){//(timeUs[ch] > 900) {
 #ifdef STORE_DATA
-							myByte[ch] |= (uint32_t) (((uint32_t) 1) << bitPtr[ch]);
+							if (bitPtr[ch] > 15)
+							myByte[ch] |= (uint16_t) ((uint16_t) 1 << (bitPtr[ch]-16));
 #endif
 							dbgLed(rcvOne[ch], 1);
 						}
@@ -315,8 +338,8 @@ ISR(PCINT1_vect) {
 
 			if (bitPtr[ch] >= 32) {
 #ifdef STORE_DATA
-				uint8_t cmd = (uint8_t) ((myByte[ch] >> 16) & 0xFF);
-				uint8_t cmdNeg = (uint8_t) ((myByte[ch] >> 24) & 0xFF);
+				uint8_t cmd = (uint8_t) ((myByte[ch]) & 0xFF);
+				uint8_t cmdNeg = (uint8_t) ((myByte[ch] >> 8) & 0xFF);
 
 				if ((cmd ^ cmdNeg) == 0xFF) {
 					commands[ch][commandsPtr[ch]] = cmd;
@@ -328,11 +351,14 @@ ISR(PCINT1_vect) {
 				bitPtr[ch] = 0;
 				status[ch] = IDLE;
 			}
+			dbgLed(ISRDBG2,0);
 		}
+#endif //DECODE_IN_MAIN
+
 	} while (PCIFR & (1<<PCIF1));
 
 	irrcPins = ~PINC;
-	dbgLed(ISRDBG,0);
+	dbgLed(ISRDBG1,0);
 }
 
 /* Count number of timer overflows, this tells us how many cycles passed */
@@ -413,6 +439,10 @@ int main() {
 			}
 		}
 		_delay_ms(5000);
+		/*
+		 * TODO: Decode in main the gaps buffers. Break down the ISR into more functions,
+		 * so the state machine controller can be reused.
+		 */
 
 //		IROn();
 //		_delay_ms(2);
