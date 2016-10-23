@@ -13,7 +13,7 @@
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
 #endif
 
-//#define DECODE_IN_MAIN
+#define DECODE_IN_MAIN
 #define STORE_DATA
 #define NUM_CHANNELS 3
 
@@ -51,6 +51,7 @@ volatile uint8_t started = 0;
 #ifdef DECODE_IN_MAIN
 volatile uint8_t gaps[NUM_CHANNELS][256];
 volatile uint8_t gapsPtr[NUM_CHANNELS];
+volatile uint8_t gapsReadPtr[NUM_CHANNELS];
 #endif
 
 #define TIMER_MAX 65535
@@ -215,20 +216,22 @@ inline void resetTime(uint8_t ch) {
 #define LO2HI(bit) ((!(irrcPins & (1 << bit))) &&  (pinc & (1 << bit)))
 #define HI2LO(bit) (( (irrcPins & (1 << bit))) && !(pinc & (1 << bit)))
 #define CHNG(bit) ((irrcPins ^ pinc) & (1<<bit))
-
-inline void processEdge(uint8_t ch, uint8_t pinc, TimeGap timeGap) {
+/*
+ * lo2hi ... 1 if rising edge, 0 otherwise
+ */
+inline void processEdge(uint8_t ch, uint8_t lo2hi, TimeGap timeGap) {
 
 	dbgLed(rcvOne[ch], 0);
 
 	switch (status[ch]) {
 	case IDLE:
-		if (LO2HI(rcvPin[ch])) {
+		if (lo2hi) {
 			status[ch] = BURST;
 		}
 		break;
 
 	case BURST:
-		if (HI2LO(rcvPin[ch])) {
+		if (!lo2hi) {
 			if (timeGap == G9P0MS) {//(timeUs[ch] > 9000) {
 				status[ch] = BURST;
 			} else {
@@ -245,7 +248,7 @@ inline void processEdge(uint8_t ch, uint8_t pinc, TimeGap timeGap) {
 
 	case RECV:
 
-		if (HI2LO(rcvPin[ch])) {
+		if (!lo2hi) {
 			if (timeGap == G9P0MS) {//(timeUs[ch] > 9000) {
 				status[ch] = BURST;
 			} else { //Should be 560us
@@ -362,7 +365,8 @@ ISR(PCINT1_vect) {
 
 			processed |= (1<<ch);
 			dbgLed(ISRDBG2,1);
-			processEdge(ch, pinc,timeGap[ch]);
+			uint8_t dir  = (LO2HI(rcvPin[ch])) ? 1 : 0;
+			processEdge(ch, dir,timeGap[ch]);
 			dbgLed(ISRDBG2,0);
 		}
 #endif //DECODE_IN_MAIN
@@ -428,6 +432,7 @@ void initBuffers(){
 		commandsReadPtr[ch] = 0;
 #ifdef DECODE_IN_MAIN
 		gapsPtr[ch] = 0;
+		gapsReadPtr[ch] = 0;
 #endif
 	}
 }
@@ -464,12 +469,31 @@ int main() {
 
 	while (true) {
 
+#ifdef DECODE_IN_MAIN
+		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
+			while (gapsReadPtr[ch] != gapsPtr[ch]){
+				uint8_t gap = gaps[ch][gapsReadPtr[ch]];
+				uint8_t dir = (gap & (1<<7)) ? 1 : 0;
+				processEdge(ch, dir, (TimeGap) (gap & 0b01111111));
+				gapsReadPtr[ch]++;
+			}
+		}
+#endif
 		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 			if (commandsReadPtr[ch] != commandsPtr[ch]) {
 				printCommandsBuffer(ch);
 			}
 		}
 		_delay_ms(5000);
+		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
+			printString("\rCH:");
+			printByte(ch);
+			printString("\rRptr:");
+			printByte(gapsReadPtr[ch]);
+			printString("\rptr:");
+			printByte(gapsPtr[ch]);
+			printString("\r");
+		}
 		/*
 		 * TODO: Decode in main the gaps buffers. Break down the ISR into more functions,
 		 * so the state machine controller can be reused.
