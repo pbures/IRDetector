@@ -42,15 +42,15 @@
 #define SET_HIGH(port,bit) port |= (1<<bit)
 #define SET_LOW(port,bit) port &= ~(1<<bit)
 
-int8_t volatile timerOverflowCnt[3] = { 0, 0, 0 };
-uint16_t volatile timerReg[3] = { 0, 0, 0 };
+int8_t volatile timerOverflowCnt[NUM_CHANNELS];
+uint16_t volatile timerReg[NUM_CHANNELS];
 volatile uint8_t irrcPins = 0;
 volatile uint8_t started = 0;
 
 /* Encode here: Gap length,edge type (raising == MSB set to 1, falling == MSB set to 0) */
 #ifdef DECODE_IN_MAIN
 volatile uint8_t gaps[NUM_CHANNELS][256];
-volatile uint8_t gapsPtr=0;
+volatile uint8_t gapsPtr[NUM_CHANNELS];
 #endif
 
 #define TIMER_MAX 65535
@@ -75,15 +75,23 @@ enum Status {
 	IDLE, BURST, RECV
 };
 
+#if NUM_CHANNELS != 3
+#error "Adjust the arrays below for proper number of channels!"
+#endif
 Status volatile status[3] = { IDLE, IDLE, IDLE };
 uint8_t rcvPin[3] = { PC1, PC2, PC3 };
 
+DbgLed rcvHiCh[3] = { NONE, NONE, NONE };
+DbgLed rcvOne[3] = { GPDBG1, GPDBG2, GPDBG3 };
+DbgLed rcvSig[3] = { RCVLED1, RCVLED2, RCVLED3 };
+
+
 #define COMMANDS_BUFLEN 256
-uint16_t volatile myByte[3] = { 0x00, 0x00, 0x00 };
-uint8_t volatile bitPtr[3] = { 0, 0, 0 };
-uint8_t volatile commands[3][COMMANDS_BUFLEN];
-uint8_t volatile commandsPtr[3] = { 0, 0, 0 };
-uint8_t volatile commandsReadPtr[3] = { 0, 0, 0 };
+uint16_t volatile myByte[NUM_CHANNELS];
+uint8_t volatile bitPtr[NUM_CHANNELS];
+uint8_t volatile commands[NUM_CHANNELS][COMMANDS_BUFLEN];
+uint8_t volatile commandsPtr[NUM_CHANNELS];
+uint8_t volatile commandsReadPtr[NUM_CHANNELS];
 
 void printCommandsBuffer(uint8_t ch) {
 	printString("Cmd buf ");
@@ -109,10 +117,6 @@ void printCommandsBuffer(uint8_t ch) {
  * A command is composed of:
  * <|||9ms|||_4.5ms_><<LSBaddr1><MSBaddr1>><<LSBaddr2><MSBaddr2>><<LSBcmd1....>
  */
-
-DbgLed rcvHiCh[3] = { NONE, NONE, NONE };
-DbgLed rcvOne[3] = { GPDBG1, GPDBG2, GPDBG3 };
-DbgLed rcvSig[3] = { RCVLED1, RCVLED2, RCVLED3 };
 
 void dbgLed(DbgLed led, uint8_t dir) {
 	switch (led) {
@@ -192,6 +196,11 @@ inline void initTimer() {
 	TCNT1 = 0;
 	TCCR1B |= (1 << CS10);
 	TIMSK1 |= (1 << TOIE1);
+
+	for(uint8_t ch=0; ch < NUM_CHANNELS; ch++) {
+		timerOverflowCnt[ch] = 0;
+		timerReg[ch] = 0;
+	}
 }
 
 inline void resetTime(uint8_t ch) {
@@ -207,6 +216,75 @@ inline void resetTime(uint8_t ch) {
 #define HI2LO(bit) (( (irrcPins & (1 << bit))) && !(pinc & (1 << bit)))
 #define CHNG(bit) ((irrcPins ^ pinc) & (1<<bit))
 
+inline void processEdge(uint8_t ch, uint8_t pinc, TimeGap timeGap) {
+
+	dbgLed(rcvOne[ch], 0);
+
+	switch (status[ch]) {
+	case IDLE:
+		if (LO2HI(rcvPin[ch])) {
+			status[ch] = BURST;
+		}
+		break;
+
+	case BURST:
+		if (HI2LO(rcvPin[ch])) {
+			if (timeGap == G9P0MS) {//(timeUs[ch] > 9000) {
+				status[ch] = BURST;
+			} else {
+				status[ch] = IDLE;
+			}
+		} else {
+			if (timeGap >= G4P5MS) {//(timeUs[ch] > 4400) {
+				status[ch] = RECV;
+			} else {
+				status[ch] = BURST;
+			}
+		}
+		break;
+
+	case RECV:
+
+		if (HI2LO(rcvPin[ch])) {
+			if (timeGap == G9P0MS) {//(timeUs[ch] > 9000) {
+				status[ch] = BURST;
+			} else { //Should be 560us
+				status[ch] = RECV;
+			}
+		} else {
+			if (timeGap >= G4P5MS) {//(timeUs[ch] > 4500) {
+				status[ch] = BURST;
+			} else {
+				status[ch] = RECV;
+				if (timeGap >= G1P2MS){//(timeUs[ch] > 900) {
+#ifdef STORE_DATA
+					if (bitPtr[ch] > 15)
+					myByte[ch] |= (uint16_t) ((uint16_t) 1 << (bitPtr[ch]-16));
+#endif
+					dbgLed(rcvOne[ch], 1);
+				}
+				bitPtr[ch]++;
+			}
+		}
+		break;
+	}
+
+	if (bitPtr[ch] >= 32) {
+#ifdef STORE_DATA
+		uint8_t cmd = (uint8_t) ((myByte[ch]) & 0xFF);
+		uint8_t cmdNeg = (uint8_t) ((myByte[ch] >> 8) & 0xFF);
+
+		if ((cmd ^ cmdNeg) == 0xFF) {
+			commands[ch][commandsPtr[ch]] = cmd;
+			commandsPtr[ch] = commandsPtr[ch] + 1;
+		}
+
+#endif
+		myByte[ch] = 0;
+		bitPtr[ch] = 0;
+		status[ch] = IDLE;
+	}
+}
 
 ISR(PCINT1_vect) {
 
@@ -216,7 +294,7 @@ ISR(PCINT1_vect) {
 
 	uint8_t pinc;
 	uint8_t processed = 0;
-	TimeGap timeGap[3];
+	TimeGap timeGap[NUM_CHANNELS];
 
 	dbgLed(ISRDBG1,1);
 	do {
@@ -263,11 +341,11 @@ ISR(PCINT1_vect) {
 
 #ifdef DECODE_IN_MAIN
 			if (HI2LO(rcvPin[ch])){
-				gaps[ch][gapsPtr] = timeGap[ch];
+				gaps[ch][gapsPtr[ch]] = timeGap[ch];
 			} else {
-				gaps[ch][gapsPtr] = (timeGap[ch] | (1 << 7));
+				gaps[ch][gapsPtr[ch]] = (timeGap[ch] | (1 << 7));
 			}
-			gapsPtr++;
+			gapsPtr[ch]++;
 
 			processed |= (1<<ch);
 #endif
@@ -282,75 +360,9 @@ ISR(PCINT1_vect) {
 			if (!CHNG(rcvPin[ch]))
 				continue;
 
-			dbgLed(ISRDBG2,1);
-
 			processed |= (1<<ch);
-			dbgLed(rcvOne[ch], 0);
-
-			switch (status[ch]) {
-			case IDLE:
-				if (LO2HI(rcvPin[ch])) {
-					status[ch] = BURST;
-				}
-				break;
-
-			case BURST:
-				if (HI2LO(rcvPin[ch])) {
-					if (timeGap[ch] == G9P0MS) {//(timeUs[ch] > 9000) {
-						status[ch] = BURST;
-					} else {
-						status[ch] = IDLE;
-					}
-				} else {
-					if (timeGap[ch] >= G4P5MS) {//(timeUs[ch] > 4400) {
-						status[ch] = RECV;
-					} else {
-						status[ch] = BURST;
-					}
-				}
-				break;
-
-			case RECV:
-
-				if (HI2LO(rcvPin[ch])) {
-					if (timeGap[ch] == G9P0MS) {//(timeUs[ch] > 9000) {
-						status[ch] = BURST;
-					} else { //Should be 560us
-						status[ch] = RECV;
-					}
-				} else {
-					if (timeGap[ch] >= G4P5MS) {//(timeUs[ch] > 4500) {
-						status[ch] = BURST;
-					} else {
-						status[ch] = RECV;
-						if (timeGap[ch] >= G1P2MS){//(timeUs[ch] > 900) {
-#ifdef STORE_DATA
-							if (bitPtr[ch] > 15)
-							myByte[ch] |= (uint16_t) ((uint16_t) 1 << (bitPtr[ch]-16));
-#endif
-							dbgLed(rcvOne[ch], 1);
-						}
-						bitPtr[ch]++;
-					}
-				}
-				break;
-			}
-
-			if (bitPtr[ch] >= 32) {
-#ifdef STORE_DATA
-				uint8_t cmd = (uint8_t) ((myByte[ch]) & 0xFF);
-				uint8_t cmdNeg = (uint8_t) ((myByte[ch] >> 8) & 0xFF);
-
-				if ((cmd ^ cmdNeg) == 0xFF) {
-					commands[ch][commandsPtr[ch]] = cmd;
-					commandsPtr[ch] = commandsPtr[ch] + 1;
-				}
-
-#endif
-				myByte[ch] = 0;
-				bitPtr[ch] = 0;
-				status[ch] = IDLE;
-			}
+			dbgLed(ISRDBG2,1);
+			processEdge(ch, pinc,timeGap[ch]);
 			dbgLed(ISRDBG2,0);
 		}
 #endif //DECODE_IN_MAIN
@@ -364,6 +376,9 @@ ISR(PCINT1_vect) {
 /* Count number of timer overflows, this tells us how many cycles passed */
 ISR(TIMER1_OVF_vect) {
 	for(uint8_t ch=0;ch<NUM_CHANNELS;ch++){
+		/* We are fine to count up to two overflows. Moreover, if we keep it this low, the numner of
+		 * microseconds can be stored in uint16_t which saves us some time in ISR.
+		 */
 		if(timerOverflowCnt[ch] < 3) timerOverflowCnt[ch]++;
 	}
 	TCNT1 = 0;
@@ -397,9 +412,24 @@ void initReceivers() {
 	SET_INPUT_MODE(DDRC, PC3);
 	SET_HIGH(PORTC, PC3);
 
+	/* Enable the pin change interrupts on these three pins corresponding to PC1,PC2,PC3 */
 	PCICR |= (1 << PCIE1);
 	PCMSK1 |= ((1 << PCINT9) | (1 << PCINT10) | ( 1<< PCINT11));
+
+	/* Store the actual status of the PINC port so we can see what has changed in ISR */
 	irrcPins = ~PINC;
+}
+
+void initBuffers(){
+	for (uint8_t ch=0;ch<NUM_CHANNELS; ch++){
+		myByte[ch] = 0;
+		bitPtr[ch] = 0;
+		commandsPtr[ch] = 0;
+		commandsReadPtr[ch] = 0;
+#ifdef DECODE_IN_MAIN
+		gapsPtr[ch] = 0;
+#endif
+	}
 }
 
 int main() {
@@ -426,6 +456,7 @@ int main() {
 
 	initTimer();
 	initReceivers();
+	initBuffers();
 
 	sei();
 
