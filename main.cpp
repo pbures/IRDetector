@@ -13,9 +13,10 @@
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
 #endif
 
+#define DEBUG
 #define DECODE_IN_MAIN
 #define STORE_DATA
-#define NUM_CHANNELS 3
+#define NUM_CHANNELS 6
 
 #define TRC_DDR 	DDRD
 #define TRC_PORT 	PORTD
@@ -49,7 +50,9 @@ volatile uint8_t started = 0;
 
 /* Encode here: Gap length,edge type (raising == MSB set to 1, falling == MSB set to 0) */
 #ifdef DECODE_IN_MAIN
-volatile uint8_t gaps[NUM_CHANNELS][256];
+#define GAPS_BUFFER_LEN 256
+
+volatile uint8_t gaps[NUM_CHANNELS][GAPS_BUFFER_LEN];
 volatile uint8_t gapsPtr[NUM_CHANNELS];
 volatile uint8_t gapsReadPtr[NUM_CHANNELS];
 #endif
@@ -60,6 +63,11 @@ enum TimeGap {
 	G9P0MS = 3, G4P5MS = 2, G1P2MS = 1, G0P5MS = 0
 };
 
+enum Status {
+	IDLE, BURST, RECV
+};
+
+#ifdef DEBUG
 enum DbgLed {
 	ISRDBG2,  //PD5 (pin 11)
 	ISRDBG1,  //PD7 (pin 13)
@@ -71,23 +79,22 @@ enum DbgLed {
 	GPDBG3,   //PD4 (pin  6)
 	ALL, NONE
 };
+#endif
 
-enum Status {
-	IDLE, BURST, RECV
-};
-
-#if NUM_CHANNELS != 3
+#if NUM_CHANNELS != 6
 #error "Adjust the arrays below for proper number of channels!"
 #endif
-Status volatile status[3] = { IDLE, IDLE, IDLE };
-uint8_t rcvPin[3] = { PC1, PC2, PC3 };
 
-DbgLed rcvHiCh[3] = { NONE, NONE, NONE };
-DbgLed rcvOne[3] = { GPDBG1, GPDBG2, GPDBG3 };
-DbgLed rcvSig[3] = { RCVLED1, RCVLED2, RCVLED3 };
+#ifdef DEBUG
+DbgLed rcvHiCh[NUM_CHANNELS] = { NONE, NONE, NONE, NONE, NONE,NONE };
+DbgLed rcvOne[NUM_CHANNELS] = { GPDBG1, GPDBG2, GPDBG3, NONE, NONE,NONE };
+DbgLed rcvSig[NUM_CHANNELS] = { RCVLED1, RCVLED2, RCVLED3, NONE, NONE, NONE };
+#endif
 
+Status volatile status[NUM_CHANNELS] = { IDLE, IDLE, IDLE, IDLE, IDLE, IDLE };
+uint8_t rcvPin[NUM_CHANNELS] = { PC0, PC1, PC2, PC3, PC4, PC5 };
 
-#define COMMANDS_BUFLEN 256
+#define COMMANDS_BUFLEN 16
 uint16_t volatile myByte[NUM_CHANNELS];
 uint8_t volatile bitPtr[NUM_CHANNELS];
 uint8_t volatile commands[NUM_CHANNELS][COMMANDS_BUFLEN];
@@ -101,7 +108,7 @@ void printCommandsBuffer(uint8_t ch) {
 	while(commandsReadPtr[ch] != commandsPtr[ch]){
 		printByte(commands[ch][commandsReadPtr[ch]]);
 		printString(" ,");
-		commandsReadPtr[ch] = commandsReadPtr[ch] + 1;
+		commandsReadPtr[ch] = (commandsReadPtr[ch] + 1) % COMMANDS_BUFLEN;
 	}
 	printString("\r");
 }
@@ -118,7 +125,7 @@ void printCommandsBuffer(uint8_t ch) {
  * A command is composed of:
  * <|||9ms|||_4.5ms_><<LSBaddr1><MSBaddr1>><<LSBaddr2><MSBaddr2>><<LSBcmd1....>
  */
-
+#ifdef DEBUG
 void dbgLed(DbgLed led, uint8_t dir) {
 	switch (led) {
 	case NONE:
@@ -192,10 +199,11 @@ void dbgLed(DbgLed led, uint8_t dir) {
 		}
 	}
 }
+#endif
 
 inline void initTimer() {
 	TCNT1 = 0;
-	TCCR1B |= (1 << CS10);
+	TCCR1B |= ((1 << CS12) /* | (1 << CS10) | (1 << CS11) */);
 	TIMSK1 |= (1 << TOIE1);
 
 	for(uint8_t ch=0; ch < NUM_CHANNELS; ch++) {
@@ -220,9 +228,9 @@ inline void resetTime(uint8_t ch) {
  * lo2hi ... 1 if rising edge, 0 otherwise
  */
 inline void processEdge(uint8_t ch, uint8_t lo2hi, TimeGap timeGap) {
-
+#ifdef DEBUG
 	dbgLed(rcvOne[ch], 0);
-
+#endif
 	switch (status[ch]) {
 	case IDLE:
 		if (lo2hi) {
@@ -264,7 +272,9 @@ inline void processEdge(uint8_t ch, uint8_t lo2hi, TimeGap timeGap) {
 					if (bitPtr[ch] > 15)
 					myByte[ch] |= (uint16_t) ((uint16_t) 1 << (bitPtr[ch]-16));
 #endif
+#ifdef DEBUG
 					dbgLed(rcvOne[ch], 1);
+#endif
 				}
 				bitPtr[ch]++;
 			}
@@ -279,7 +289,7 @@ inline void processEdge(uint8_t ch, uint8_t lo2hi, TimeGap timeGap) {
 
 		if ((cmd ^ cmdNeg) == 0xFF) {
 			commands[ch][commandsPtr[ch]] = cmd;
-			commandsPtr[ch] = commandsPtr[ch] + 1;
+			commandsPtr[ch] = (commandsPtr[ch] + 1) % COMMANDS_BUFLEN;
 		}
 
 #endif
@@ -298,8 +308,9 @@ ISR(PCINT1_vect) {
 	uint8_t pinc;
 	uint8_t processed = 0;
 	TimeGap timeGap[NUM_CHANNELS];
-
+#ifdef DEBUG
 	dbgLed(ISRDBG1,1);
+#endif
 	do {
 		pinc = ~PINC;
 		if (PCIFR & (1<<PCIF1)) {
@@ -313,12 +324,12 @@ ISR(PCINT1_vect) {
 
 			if (!CHNG(rcvPin[ch]))
 				continue;
-
+#ifdef DEBUG
 			if (pinc & (1 << rcvPin[ch]))
 				dbgLed(rcvSig[ch], 1);
 			else
 				dbgLed(rcvSig[ch], 0);
-
+#endif
 			/* Get the number of ticks, overflows on the counter and reset the counter. */
 			uint16_t ticks = TCNT1;
 			uint8_t overflows = timerOverflowCnt[ch];
@@ -328,15 +339,16 @@ ISR(PCINT1_vect) {
 				overflows++;
 			}
 
-			/* Compute the time in microseconds, divide the ticks by 8 (>>3) as we are on 8MhZ */
-			uint16_t timeUs = ((overflows * 8192) + (ticks >> 3) - (timerReg[ch] >> 3));
+			/* Compute the time in units of 64 microseconds. We are running 8MhZ and clock prescaler is set to 256, and divide by two
+			   so we fit into uint16_t in case we have overflows equal to 1. */
+			uint32_t timeUs = ((overflows * TIMER_MAX/2) + (ticks >> 1) - (timerReg[ch] >> 1));
 			resetTime(ch);
 
-			if (timeUs < 900) {
+			if (timeUs < 900/64) {
 				timeGap[ch] = G0P5MS;
-			} else if (timeUs < 4400) {
+			} else if (timeUs < 4400/64) {
 				timeGap[ch] = G1P2MS;
-			} else if (timeUs < 8900) {
+			} else if (timeUs < 8900/64) {
 				timeGap[ch] = G4P5MS;
 			} else {
 				timeGap[ch] = G9P0MS;
@@ -348,7 +360,7 @@ ISR(PCINT1_vect) {
 			} else {
 				gaps[ch][gapsPtr[ch]] = (timeGap[ch] | (1 << 7));
 			}
-			gapsPtr[ch]++;
+			gapsPtr[ch] = (gapsPtr[ch] + 1) % GAPS_BUFFER_LEN;
 
 			processed |= (1<<ch);
 #endif
@@ -374,7 +386,9 @@ ISR(PCINT1_vect) {
 	} while (PCIFR & (1<<PCIF1));
 
 	irrcPins = ~PINC;
+#ifdef DEBUG
 	dbgLed(ISRDBG1,0);
+#endif
 }
 
 /* Count number of timer overflows, this tells us how many cycles passed */
@@ -383,7 +397,7 @@ ISR(TIMER1_OVF_vect) {
 		/* We are fine to count up to two overflows. Moreover, if we keep it this low, the numner of
 		 * microseconds can be stored in uint16_t which saves us some time in ISR.
 		 */
-		if(timerOverflowCnt[ch] < 3) timerOverflowCnt[ch]++;
+		if(timerOverflowCnt[ch] == 0) timerOverflowCnt[ch]++;
 	}
 	TCNT1 = 0;
 }
@@ -409,16 +423,14 @@ void IRInit() {
  * Initialize receivers on pins C, PC0, PC1, and PC2.
  */
 void initReceivers() {
-	SET_INPUT_MODE(DDRC, PC1);
-	SET_HIGH(PORTC, PC1);
-	SET_INPUT_MODE(DDRC, PC2);
-	SET_HIGH(PORTC, PC2);
-	SET_INPUT_MODE(DDRC, PC3);
-	SET_HIGH(PORTC, PC3);
+
+	DDRC &= ~( (1<<PC1) | (1<<PC2) | (1<<PC3) | (1<<PC4) | (1<<PC5) | (1<<PC0));
+	PORTC |= ( (1<<PC1) | (1<<PC2) | (1<<PC3) | (1<<PC4) | (1<<PC5) | (1<<PC0));
 
 	/* Enable the pin change interrupts on these three pins corresponding to PC1,PC2,PC3 */
 	PCICR |= (1 << PCIE1);
-	PCMSK1 |= ((1 << PCINT9) | (1 << PCINT10) | ( 1<< PCINT11));
+	PCMSK1 |= ((1<<PCINT8) | (1 << PCINT9) | (1 << PCINT10) | (1 << PCINT11) | (1 << PCINT12)
+			| (1 << PCINT13));
 
 	/* Store the actual status of the PINC port so we can see what has changed in ISR */
 	irrcPins = ~PINC;
@@ -444,7 +456,7 @@ int main() {
 	SET_OUTPUT_MODE(RCVLED3_DDR, RCVLED3_BIT);
 
 	DDRD |= ((1 << PD5) | (1 << PD7) | (1 << PD3) | (1 << PD2) | (1 << PD4));
-
+#ifdef DEBUG
 	dbgLed(RCVLED1, 1);
 	_delay_ms(800);
 	dbgLed(RCVLED1, 0);
@@ -455,7 +467,7 @@ int main() {
 	_delay_ms(800);
 	dbgLed(RCVLED3, 0);
 	dbgLed(ALL, 0);
-
+#endif
 	initUSART();
 	IRInit();
 
@@ -475,7 +487,7 @@ int main() {
 				uint8_t gap = gaps[ch][gapsReadPtr[ch]];
 				uint8_t dir = (gap & (1<<7)) ? 1 : 0;
 				processEdge(ch, dir, (TimeGap) (gap & 0b01111111));
-				gapsReadPtr[ch]++;
+				gapsReadPtr[ch] = (gapsReadPtr[ch] + 1) % GAPS_BUFFER_LEN;
 			}
 		}
 #endif
@@ -484,20 +496,9 @@ int main() {
 				printCommandsBuffer(ch);
 			}
 		}
-		_delay_ms(5000);
-		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-			printString("\rCH:");
-			printByte(ch);
-			printString("\rRptr:");
-			printByte(gapsReadPtr[ch]);
-			printString("\rptr:");
-			printByte(gapsPtr[ch]);
-			printString("\r");
-		}
-		/*
-		 * TODO: Decode in main the gaps buffers. Break down the ISR into more functions,
-		 * so the state machine controller can be reused.
-		 */
+
+		/* Just to simulate the CPU does sth else */
+		_delay_ms(1000);
 
 //		IROn();
 //		_delay_ms(2);
