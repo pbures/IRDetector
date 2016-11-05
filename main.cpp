@@ -70,6 +70,18 @@ void printCommandsBuffer(uint8_t ch) {
 	printString("=");
 	while (commandsReadPtr[ch] != commandsPtr[ch]) {
 		printByte(commands[ch][commandsReadPtr[ch]]);
+
+		//TODO: Put this somewhere else later on!
+		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 12)) {
+			OCR1A = 600;
+		};
+		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 94)) {
+			OCR1A = 2500;
+		}
+		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 24)) {
+					OCR1A = 1500;
+				}
+
 		printString(" ,");
 		commandsReadPtr[ch] = (commandsReadPtr[ch] + 1) % COMMANDS_BUFLEN;
 	}
@@ -156,7 +168,8 @@ ISR(PCINT1_vect) {
 
 	/* Compute the time in units of 64 microseconds. We are running 8MhZ and clock prescaler is set to 256, and divide by two
 	 so we fit into uint16_t in case we have overflows equal to 1. 64us is the timeUs resolution. */
-	uint16_t timeUs = ((overflows * TIMER_MAX / 2) + (ticks >> 1) - (timerReg >> 1));
+	uint16_t timeUs = ((overflows * TIMER_MAX / 2) + (ticks >> 1)
+			- (timerReg >> 1));
 	resetTime();
 
 	if (pinc != portStatus[portStatusPtr]) {
@@ -214,7 +227,7 @@ void initReceivers() {
 	/* Enable the pin change interrupts on these three pins corresponding to PC1,PC2,PC3 */
 	PCICR |= (1 << PCIE1);
 	PCMSK1 |= ((1 << PCINT8) | (1 << PCINT9) | (1 << PCINT10) | (1 << PCINT11)
-	 | (1 << PCINT12) | (1 << PCINT13) );
+			| (1 << PCINT12) | (1 << PCINT13));
 
 	/* Store the actual status of the PINC port so we can see what has changed in ISR */
 	irrcPins = ~PINC;
@@ -242,6 +255,22 @@ inline void initTimer() {
 
 	timerOverflowCnt = 0;
 	timerReg = 0;
+}
+
+void initServo() {
+	TCCR1A |= (1 << WGM11);
+	TCCR1B |= ((1 << WGM12) | (1 << WGM13));
+
+	TCCR1B |= (1 << CS11); //Prescaler to 8MhZ, each tick = 1us.
+	TCCR1A |= (1 << COM1A1);
+
+	ICR1 = 20000; //20ms cycle.
+	DDRB |= (1 << PB1);
+
+	OCR1A = 1500;
+
+	DDRB |= (1 << PB1);
+
 }
 
 void processPortStateChange(uint8_t ptr) {
@@ -362,12 +391,7 @@ void processPortStateChange(uint8_t ptr) {
 				uint8_t cmdNeg = (uint8_t) ((myWord[ch] >> 8) & 0xFF);
 
 				if ((cmd ^ cmdNeg) == 0xFF) {
-					printStringSMDebug(" ST");
-					printStringSMDebug("(");
-					printByteSMDebug(ch);
-					printStringSMDebug("): ");
-					printBinaryByteSMDebug(cmd);
-					printStringSMDebug("\r\n");
+					printStringSMDebug(" ST"); printStringSMDebug("("); printByteSMDebug(ch); printStringSMDebug("): "); printBinaryByteSMDebug(cmd); printStringSMDebug("\r\n");
 
 					commands[ch][commandsPtr[ch]] = cmd;
 					commandsPtr[ch] = (commandsPtr[ch] + 1) % COMMANDS_BUFLEN;
@@ -424,6 +448,7 @@ int main() {
 	initTimer();
 	initReceivers();
 	initBuffers();
+	initServo();
 
 	sei();
 
