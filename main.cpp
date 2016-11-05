@@ -14,7 +14,7 @@
 #define PRINT_COMMANDS
 #define PRINT_HISTOGRAM
 
-#define NUM_CHANNELS 2
+#define NUM_CHANNELS 6
 #define NUM_READINGS 256
 #define COMMANDS_BUFLEN 16
 
@@ -34,7 +34,7 @@ enum Status {
 };
 
 /* Timer variables */
-#define TIMER_MAX 65535
+#define TIMER_MAX 256 //65535
 int8_t volatile timerOverflowCnt;
 uint16_t volatile timerReg;
 volatile uint8_t irrcPins = 0;
@@ -101,10 +101,10 @@ void printCommandsBuffers() {
  */
 
 inline void resetTime() {
-	timerReg = TCNT1;
+	timerReg = TCNT0;
 	timerOverflowCnt = 0;
-	if (TIFR1 & (1 << TOV1)) {
-		timerReg = TCNT1;
+	if (TIFR0 & (1 << TOV0)) {
+		timerReg = TCNT0;
 		timerOverflowCnt = -1;
 	}
 }
@@ -146,18 +146,17 @@ ISR(PCINT1_vect) {
 #endif
 
 	/* Get the number of ticks, overflows on the counter and reset the counter. */
-	uint16_t ticks = TCNT1;
+	uint16_t ticks = TCNT0;
 	uint8_t overflows = timerOverflowCnt;
 
-	if (TIFR1 & (1 << TOV1)) { /* We have just encountered timer overflow. Overflows counters are not updated however. */
-		ticks = TCNT1;
+	if (TIFR0 & (1 << TOV0)) { /* We have just encountered timer overflow. Overflows counters are not updated however. */
+		ticks = TCNT0;
 		overflows++;
 	}
 
 	/* Compute the time in units of 64 microseconds. We are running 8MhZ and clock prescaler is set to 256, and divide by two
 	 so we fit into uint16_t in case we have overflows equal to 1. 64us is the timeUs resolution. */
-	uint16_t timeUs = ((overflows * TIMER_MAX / 2) + (ticks >> 1)
-			- (timerReg >> 1));
+	uint16_t timeUs = ((overflows * TIMER_MAX / 2) + (ticks >> 1) - (timerReg >> 1));
 	resetTime();
 
 	if (pinc != portStatus[portStatusPtr]) {
@@ -174,33 +173,33 @@ ISR(PCINT1_vect) {
 }
 
 /* Count number of timer overflows, this tells us how many cycles passed */
-ISR(TIMER1_OVF_vect) {
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-		/* We are fine to count up to two overflows. Moreover, if we keep it this low, the numner of
-		 * microseconds can be stored in uint16_t which saves us some time in ISR.
-		 */
-		if (timerOverflowCnt == 0)
-			timerOverflowCnt++;
-	}
-	TCNT1 = 0;
+ISR(TIMER0_OVF_vect) {
+	/* We are fine to count up to two overflows. Moreover, if we keep it this low, the numner of
+	 * microseconds can be stored in uint16_t which saves us some time in ISR.
+	 */
+	if (timerOverflowCnt < 254)
+		timerOverflowCnt++;
+	TCNT0 = 0;
 }
 
-void IROn() {
-	OCR0A = 105; // 8Mhz / 38 Khz. Blink every 210th tick, it is 105th up, 210th down. The time of one blink is 26us.
-	TRC_DDR |= (1 << TRC_BIT);
-}
+/*
+ void IROn() {
+ OCR0A = 105; // 8Mhz / 38 Khz. Blink every 210th tick, it is 105th up, 210th down. The time of one blink is 26us.
+ TRC_DDR |= (1 << TRC_BIT);
+ }
 
-void IROff() {
-	TRC_DDR &= ~(1 << TRC_BIT);
-}
+ void IROff() {
+ TRC_DDR &= ~(1 << TRC_BIT);
+ }
 
-void IRInit() {
-	SET_OUTPUT_MODE(TRC_DDR, TRC_BIT);
-	IROff();
-	TCCR0A |= (1 << WGM01); /* CTC Mode */
-	TCCR0A |= (1 << COM0A0); /* Toggle PD6 on cycle through */
-	TCCR0B |= (1 << CS00); /* Prescaler to 1 */
-}
+ void IRInit() {
+ SET_OUTPUT_MODE(TRC_DDR, TRC_BIT);
+ IROff();
+ TCCR0A |= (1 << WGM01); // CTC Mode
+ TCCR0A |= (1 << COM0A0); // Toggle PD6 on cycle through
+ TCCR0B |= (1 << CS00); // Prescaler to 1
+ }
+ */
 
 /*
  * Initialize receivers on pins C, PC0, PC1, and PC2.
@@ -215,7 +214,7 @@ void initReceivers() {
 	/* Enable the pin change interrupts on these three pins corresponding to PC1,PC2,PC3 */
 	PCICR |= (1 << PCIE1);
 	PCMSK1 |= ((1 << PCINT8) | (1 << PCINT9) | (1 << PCINT10) | (1 << PCINT11)
-			| (1 << PCINT12) | (1 << PCINT13));
+	 | (1 << PCINT12) | (1 << PCINT13) );
 
 	/* Store the actual status of the PINC port so we can see what has changed in ISR */
 	irrcPins = ~PINC;
@@ -236,9 +235,10 @@ void initBuffers() {
 }
 
 inline void initTimer() {
-	TCNT1 = 0;
-	TCCR1B |= ((1 << CS12) /* | (1 << CS10) | (1 << CS11) */); /* Prescaler set to 256 */
-	TIMSK1 |= (1 << TOIE1);
+	TCNT0 = 0;
+	TCCR0A = 0;
+	TCCR0B = ((1 << CS02) /* | (1 << CS00) | (1 << CS01) */); /* Prescaler set to 256 */
+	TIMSK0 = (1 << TOIE0);
 
 	timerOverflowCnt = 0;
 	timerReg = 0;
@@ -262,7 +262,6 @@ void processPortStateChange(uint8_t ptr) {
 				lo2hi = 1;
 			}
 
-
 			/* If there was a change on the given channel */
 			if (lo2hi) {
 				printStringSMDebug("LOHI");
@@ -276,16 +275,16 @@ void processPortStateChange(uint8_t ptr) {
 
 			if (gap < 900 / 64) {
 				timeGap = G0P5MS;
-				printStringSMDebug("G0P5MS");
+				printStringSMDebug(" G0P5MS");
 			} else if (gap < 4400 / 64) {
 				timeGap = G1P2MS;
-				printStringSMDebug("G1P2MS");
+				printStringSMDebug(" G1P2MS");
 			} else if (gap < 8900 / 64) {
 				timeGap = G4P5MS;
-				printStringSMDebug("G4P5MS");
+				printStringSMDebug(" G4P5MS");
 			} else {
 				timeGap = G9P0MS;
-				printStringSMDebug("G9P0MS");
+				printStringSMDebug(" G9P0MS");
 			}
 
 			printStringSMDebug(" (");printByteSMDebug(gap);printStringSMDebug(")");
@@ -363,7 +362,12 @@ void processPortStateChange(uint8_t ptr) {
 				uint8_t cmdNeg = (uint8_t) ((myWord[ch] >> 8) & 0xFF);
 
 				if ((cmd ^ cmdNeg) == 0xFF) {
-					printStringSMDebug(" ST");printStringSMDebug("(");printByteSMDebug(ch);printStringSMDebug("): ");printBinaryByteSMDebug(cmd);printStringSMDebug("\r\n");
+					printStringSMDebug(" ST");
+					printStringSMDebug("(");
+					printByteSMDebug(ch);
+					printStringSMDebug("): ");
+					printBinaryByteSMDebug(cmd);
+					printStringSMDebug("\r\n");
 
 					commands[ch][commandsPtr[ch]] = cmd;
 					commandsPtr[ch] = (commandsPtr[ch] + 1) % COMMANDS_BUFLEN;
@@ -391,7 +395,7 @@ void processPortStateChanges() {
 	while (portStatusReadPtr != portStatusPtr) {
 		processPortStateChange(portStatusReadPtr);
 
-		printStringSMDebug("\r\n");printBinaryByteSMDebug(portStatus[portStatusReadPtr]);printStringSMDebug(" dt:");printByteSMDebug(portStatusTime[portStatusReadPtr]);
+		//printString("\r\n");printBinaryByte(portStatus[portStatusReadPtr]);printString(" dt:");printByte(portStatusTime[portStatusReadPtr]);
 
 		portStatusReadPtr = (portStatusReadPtr + 1) % NUM_READINGS;
 	}
@@ -399,24 +403,24 @@ void processPortStateChanges() {
 
 int main() {
 
-
 #ifdef DEBUG_LEDS
 	initDebugLeds();
 	DBGLED(RCVLED1, 1);
 	_delay_ms(500);
 	DBGLED(RCVLED1, 0);
-	DBGLED(RCVLED2, 1);
-	_delay_ms(500);
-	DBGLED(RCVLED2, 0);
-	DBGLED(RCVLED3, 1);
-	_delay_ms(500);
-	DBGLED(RCVLED3, 0);
-	DBGLED(ALL, 0);
+//	DBGLED(RCVLED2, 1);
+//	_delay_ms(500);
+//	DBGLED(RCVLED2, 0);
+//	DBGLED(RCVLED3, 1);
+//	_delay_ms(500);
+//	DBGLED(RCVLED3, 0);
+//	DBGLED(ALL, 0);
 #endif
 
 	initUSART();
-	IRInit();
-
+	/*
+	 IRInit();
+	 */
 	initTimer();
 	initReceivers();
 	initBuffers();

@@ -11,5 +11,9 @@
 #define TRC_PIN 	PIND
 #define TRC_BIT 	PD6
 
+#define SERVO_DDR 	DDRD
+#define SERVO_PORT 	PORTD
+#define SERVO_PIN 	PIND
+#define SERVO_BIT 	PD6
 
 #endif /* PINDEFS_H_ */
