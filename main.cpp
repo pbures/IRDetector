@@ -15,6 +15,7 @@
 #define PRINT_HISTOGRAM
 
 #define NUM_CHANNELS 6
+#define FIRST_CHANNEL 2
 #define NUM_READINGS 256
 #define COMMANDS_BUFLEN 16
 
@@ -37,7 +38,6 @@ enum Status {
 #define TIMER_MAX 256 //65535
 int8_t volatile timerOverflowCnt;
 uint16_t volatile timerReg;
-volatile uint8_t irrcPins = 0;
 volatile uint8_t started = 0;
 
 /* Buffer for BANK C changes */
@@ -150,9 +150,9 @@ inline void printHistogram() {
 	printString("\r\n");
 }
 
-ISR(PCINT1_vect) {
+ISR(PCINT2_vect) {
 
-	uint8_t pinc = ~PINC;
+	uint8_t pind = ~PIND;
 #ifdef DEBUG_LEDS
 	DBGLED(RCVLED1, 1);
 #endif
@@ -172,12 +172,12 @@ ISR(PCINT1_vect) {
 			- (timerReg >> 1));
 	resetTime();
 
-	if (pinc != portStatus[portStatusPtr]) {
+	if (pind != portStatus[portStatusPtr]) {
 		if (timeUs > 0) { /* This is another event within 64us, store into the current status */
 			portStatusPtr = (portStatusPtr + 1) % NUM_READINGS;
 			portStatusTime[portStatusPtr] = (timeUs > 255) ? 255 : timeUs;
 		}
-		portStatus[portStatusPtr] = pinc;
+		portStatus[portStatusPtr] = pind;
 	}
 
 #ifdef DEBUG_LEDS
@@ -215,23 +215,20 @@ ISR(TIMER0_OVF_vect) {
  */
 
 /*
- * Initialize receivers on pins C, PC0, PC1, and PC2.
+ * Initialize receivers on pins D, PD2, PD3, ....
  */
 void initReceivers() {
 
-	DDRC &= ~((1 << PC1) | (1 << PC2) | (1 << PC3) | (1 << PC4) | (1 << PC5)
-			| (1 << PC0));
-	PORTC |= ((1 << PC1) | (1 << PC2) | (1 << PC3) | (1 << PC4) | (1 << PC5)
-			| (1 << PC0));
+	DDRD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7));
+	PORTD |= ((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7));
 
-	/* Enable the pin change interrupts on these three pins corresponding to PC1,PC2,PC3 */
-	PCICR |= (1 << PCIE1);
-	PCMSK1 |= ((1 << PCINT8) | (1 << PCINT9) | (1 << PCINT10) | (1 << PCINT11)
-			| (1 << PCINT12) | (1 << PCINT13));
+	/* Enable the pin change interrupts on these three pins corresponding to PD2, PD3, ... */
+	PCICR |= (1 << PCIE2);
+	PCMSK2 |= ((1 << PCINT18) | (1 << PCINT19) | (1 << PCINT20) | (1 << PCINT21)
+			| (1 << PCINT22) | (1 << PCINT23));
 
-	/* Store the actual status of the PINC port so we can see what has changed in ISR */
-	irrcPins = ~PINC;
-	channelStatusLast = ~PINC;
+	/* Store the actual status of the PIND port so we can see what has changed in ISR */
+	channelStatusLast = ~PIND;
 }
 
 void initBuffers() {
@@ -285,9 +282,9 @@ void processPortStateChange(uint8_t ptr) {
 	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) { /* Let us start with single channel */
 		uint8_t lo2hi = 0;
 		printStringSMDebug("\r\nch:[");printByteSMDebug(ch);printStringSMDebug("]");
-		if ((portState ^ channelStatusLast) & (1 << ch)) {
+		if ((portState ^ channelStatusLast) & (1 << (ch + FIRST_CHANNEL))) {
 
-			if (portState & (1 << ch)) {
+			if (portState & (1 << (ch + FIRST_CHANNEL))) {
 				lo2hi = 1;
 			}
 
