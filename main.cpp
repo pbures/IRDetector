@@ -2,25 +2,18 @@
  *  Created on: 11. 10. 2016
  *      Author: Pavel Bures
  */
+#include "config.h"
+
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
 #include <avr/power.h>
 #include "USART/USART.h"
 
-#define DEBUG_LEDS
-//#define DEBUG_STATE_MACHINE
-#define STORE_DATA
-#define PRINT_COMMANDS
-#define PRINT_HISTOGRAM
-
-#define NUM_CHANNELS 6
-#define FIRST_CHANNEL 2
-#define NUM_READINGS 256
-#define COMMANDS_BUFLEN 16
-
-#include "pindefs.h"
 #include "debug.h"
+#include "pindefs.h"
+#include "CmdBuffer.h"
+#include "Histogram.h"
 
 #if F_CPU != 8000000
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
@@ -54,15 +47,20 @@ uint16_t myWord[NUM_CHANNELS];
 uint8_t bitPtr[NUM_CHANNELS];
 
 /* Received commands buffer */
+#ifdef USE_OOP
+CmdBuffer cmdBuffer;
+Histogram hist(&cmdBuffer);
+#else
 uint8_t volatile commands[NUM_CHANNELS][COMMANDS_BUFLEN];
 uint8_t volatile commandsPtr[NUM_CHANNELS];
 uint8_t volatile commandsReadPtr[NUM_CHANNELS];
+#endif
 
 /* Histogram data */
 uint8_t histogram[NUM_CHANNELS];
 uint8_t maxChannels;
 uint8_t prevMaxChannels;
-
+#ifndef USE_OOP
 void printCommandsBuffer(uint8_t ch) {
 #ifdef PRINT_COMMANDS
 	printString("CH:");
@@ -90,12 +88,19 @@ void printCommandsBuffer(uint8_t ch) {
 	commandsReadPtr[ch] = commandsPtr[ch];
 #endif
 }
+#endif
 
 void printCommandsBuffers() {
 	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
+#ifdef USE_OOP
+		printString("CH:"); printByte(ch);
+		if (cmdBuffer.hasCode()) cmdBuffer.print(0);
+#else
 		if (commandsReadPtr[ch] != commandsPtr[ch]) {
 			printCommandsBuffer(ch);
 		}
+#endif
+
 	}
 }
 
@@ -235,9 +240,10 @@ void initBuffers() {
 	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 		myWord[ch] = 0;
 		bitPtr[ch] = 0;
+#ifndef USE_OOP
 		commandsPtr[ch] = 0;
 		commandsReadPtr[ch] = 0;
-
+#endif
 		channelStatusTimeGap[ch] = 0;
 		channelSMStatus[ch] = IDLE;
 	}
@@ -389,9 +395,13 @@ void processPortStateChange(uint8_t ptr) {
 
 				if ((cmd ^ cmdNeg) == 0xFF) {
 					printStringSMDebug(" ST"); printStringSMDebug("("); printByteSMDebug(ch); printStringSMDebug("): "); printBinaryByteSMDebug(cmd); printStringSMDebug("\r\n");
-
+#ifdef USE_OOP
+					cmdBuffer.add(cmd,ch);
+#else
 					commands[ch][commandsPtr[ch]] = cmd;
 					commandsPtr[ch] = (commandsPtr[ch] + 1) % COMMANDS_BUFLEN;
+#endif
+
 					if (histogram[ch] < 255)
 						histogram[ch]++;
 				}
@@ -454,6 +464,7 @@ int main() {
 	while (true) {
 		processPortStateChanges();
 		printCommandsBuffers();
+		//TODO: Switch here to use OOP (hist, cmdBuffer).
 	}
 }
 
