@@ -15,8 +15,9 @@
 
 #ifdef DEBUG_LEDS
 enum DbgLed {
-	RCVLED1,  //PB0 (pin 14) (CH0)
-	RCVLED2,  //PB2 (pin 16) (CH1)
+	RCVLED1,  //PB2 (pin 16)
+	RCVLED2,  //PB0 (pin 14)
+	RCVLED3,  //PB6 (pin  9)
 	ALL,
 	NONE
 };
@@ -29,7 +30,7 @@ enum DbgLed {
 #endif
 
 void initDebugLeds(){
-	DDRB |= ((1 << PB2) | (1 << PB0));
+	DDRB |= ((1 << PB2) | (1 << PB0) | (1 << PB6));
 }
 
 #ifdef DEBUG_LEDS
@@ -52,11 +53,18 @@ void dbgLed(DbgLed led, uint8_t dir) {
 			SET_LOW(PORTB, PB2);
 		break;
 
+	case RCVLED3:
+		if(dir)
+			SET_HIGH(PORTB, PB6);
+		else
+			SET_HIGH(PORTB, PB6);
+		break;
+
 	case ALL:
 		if (dir) {
-			PORTB |= (1<< PB2) | (1<< PB0);
+			PORTB |= (1 << PB0) | (1 << PB2) | (1 << PB6);
 		} else {
-			PORTD &= ~((1 << PB2) | (1 << PB0));
+			PORTD &= ~((1 << PB2) | (1 << PB0) | (1 << PB6));
 		}
 	}
 }

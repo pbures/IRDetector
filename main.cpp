@@ -429,13 +429,13 @@ int main() {
 	DBGLED(RCVLED1, 1);
 	_delay_ms(500);
 	DBGLED(RCVLED1, 0);
-//	DBGLED(RCVLED2, 1);
-//	_delay_ms(500);
-//	DBGLED(RCVLED2, 0);
-//	DBGLED(RCVLED3, 1);
-//	_delay_ms(500);
-//	DBGLED(RCVLED3, 0);
-//	DBGLED(ALL, 0);
+	DBGLED(RCVLED2, 1);
+	_delay_ms(500);
+	DBGLED(RCVLED2, 0);
+	DBGLED(RCVLED3, 1);
+	_delay_ms(500);
+	DBGLED(RCVLED3, 0);
+	DBGLED(ALL, 0);
 #endif
 
 	initUSART();
