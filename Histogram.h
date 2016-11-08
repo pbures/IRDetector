@@ -17,7 +17,7 @@ class Histogram {
 
 public:
 	Histogram(CmdBuffer *buffer);
-	bool updateHistogram(uint8_t ch);
+	bool updateHistogram();
 	void print();
 
 	uint8_t channels[NUM_CHANNELS];

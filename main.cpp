@@ -47,20 +47,10 @@ uint16_t myWord[NUM_CHANNELS];
 uint8_t bitPtr[NUM_CHANNELS];
 
 /* Received commands buffer */
+
 CmdBuffer cmdBuffer;
+CmdBufferIterator cmdBufferIterator(&cmdBuffer);
 Histogram hist(&cmdBuffer);
-
-/* Histogram data */
-uint8_t histogram[NUM_CHANNELS];
-uint8_t maxChannels;
-uint8_t prevMaxChannels;
-
-void printCommandsBuffers() {
-	if (cmdBuffer.hasCode()) {
-		cmdBuffer.print();
-		cmdBuffer.reset();
-	}
-}
 
 /*
  * The NEC protocol uses pulse distance encoding of the bits. Each pulse is a 560µs
@@ -84,34 +74,6 @@ inline void resetTime() {
 	}
 }
 
-uint8_t updateHistogramValues() {
-	uint8_t minChannelValue = 255;
-	uint8_t maxChannelValue = 0;
-	uint8_t maxChannels = 0;
-
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-		minChannelValue =
-				(histogram[ch] < minChannelValue) ?
-						histogram[ch] : minChannelValue;
-		maxChannelValue =
-				(histogram[ch] > maxChannelValue) ?
-						histogram[ch] : maxChannelValue;
-	}
-
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-		if (maxChannelValue > 0 && histogram[ch] == maxChannelValue)
-			maxChannels |= (1 << ch);
-		histogram[ch] = histogram[ch] - minChannelValue;
-	}
-
-	return maxChannels;
-}
-
-inline void printHistogram() {
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++)
-		transmitByte((char) ('0' + histogram[NUM_CHANNELS - ch - 1]));
-	printString("\r\n");
-}
 
 ISR(PCINT2_vect) {
 
@@ -352,9 +314,6 @@ void processPortStateChange(uint8_t ptr) {
 				if ((cmd ^ cmdNeg) == 0xFF) {
 					printStringSMDebug(" ST");printStringSMDebug("(");printByteSMDebug(ch);printStringSMDebug("): ");printBinaryByteSMDebug(cmd);printStringSMDebug("\r\n");
 					cmdBuffer.add(cmd, ch);
-
-					if (histogram[ch] < 255)
-						histogram[ch]++;
 				}
 
 #endif
@@ -414,7 +373,12 @@ int main() {
 
 	while (true) {
 		processPortStateChanges();
-		printCommandsBuffers();
+		if (hist.updateHistogram()) {
+			hist.print();
+		}
+		cmdBufferIterator.print();
+		cmdBuffer.reset();
+
 		//TODO: Switch here to use OOP (hist, cmdBuffer).
 	}
 }

@@ -42,24 +42,27 @@ uint8_t Histogram::getMinChannelVal() {
 	return maxVal;
 }
 
-bool Histogram::updateHistogram(uint8_t ch) {
+bool Histogram::updateHistogram() {
 
-	uint8_t minVal = getMinChannelVal();
+	if (!buffer->hasNewCode()) return false;
+
 	for(uint8_t ch=0; ch < NUM_CHANNELS; ch++){
-		channels[ch] -= minVal;
+		channels[ch] = 0;
 	}
 
-	if (!buffer->hasCode()) return false;
-
-	while(buffer->hasCode()){
-		Code *code = buffer->getCode();
+	Code* code;
+	CmdBufferIterator iterator(buffer, true);
+	while((code = iterator.next())){
+		if (code->channel == CmdBuffer::UNDEF_CHANNEL) continue;
 		channels[code->channel] = min(channels[code->channel] + 1, 255);
 	}
+
 	return true;
 }
 
 void Histogram::print() {
 	printString("Histogram:\r\n");
+
 	for (uint8_t ch=0;ch<NUM_CHANNELS; ch++){
 		printString("CH:"); printByte(ch); printString(":");
 		for(uint8_t i=0;i<channels[ch];i++){
