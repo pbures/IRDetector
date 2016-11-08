@@ -10,9 +10,9 @@
 
 #include "config.h"
 #include <stdint.h>
-
 #include "USART/USART.h"
 
+#define COMMANDS_BUFLEN 32
 struct Code {
 	uint8_t code;
 	uint8_t channel;
@@ -26,14 +26,13 @@ public:
 	Code* getCode();
 	bool add(uint8_t code, uint8_t ch);
 	void reset();
-	void print(char *prefix);
+	void print();
 
 private:
-	uint8_t commands[COMMANDS_BUFLEN];
-	uint8_t commandsPtr;
-	uint8_t commandsReadPtr;
-
+	uint8_t codesPtr;
+	uint8_t codesReadPtr;
 	Code codes[COMMANDS_BUFLEN];
+
 	Code retCode;
 };
 

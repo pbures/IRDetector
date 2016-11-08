@@ -47,60 +47,18 @@ uint16_t myWord[NUM_CHANNELS];
 uint8_t bitPtr[NUM_CHANNELS];
 
 /* Received commands buffer */
-#ifdef USE_OOP
 CmdBuffer cmdBuffer;
 Histogram hist(&cmdBuffer);
-#else
-uint8_t volatile commands[NUM_CHANNELS][COMMANDS_BUFLEN];
-uint8_t volatile commandsPtr[NUM_CHANNELS];
-uint8_t volatile commandsReadPtr[NUM_CHANNELS];
-#endif
 
 /* Histogram data */
 uint8_t histogram[NUM_CHANNELS];
 uint8_t maxChannels;
 uint8_t prevMaxChannels;
-#ifndef USE_OOP
-void printCommandsBuffer(uint8_t ch) {
-#ifdef PRINT_COMMANDS
-	printString("CH:");
-	printByte(ch);
-	printString("=");
-	while (commandsReadPtr[ch] != commandsPtr[ch]) {
-		printByte(commands[ch][commandsReadPtr[ch]]);
-
-		//TODO: Put this somewhere else later on!
-		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 12)) {
-			OCR1A = 600;
-		};
-		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 94)) {
-			OCR1A = 2500;
-		}
-		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 24)) {
-					OCR1A = 1500;
-				}
-
-		printString(" ,");
-		commandsReadPtr[ch] = (commandsReadPtr[ch] + 1) % COMMANDS_BUFLEN;
-	}
-	printString("\r\n");
-#else
-	commandsReadPtr[ch] = commandsPtr[ch];
-#endif
-}
-#endif
 
 void printCommandsBuffers() {
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-#ifdef USE_OOP
-		printString("CH:"); printByte(ch);
-		if (cmdBuffer.hasCode()) cmdBuffer.print(0);
-#else
-		if (commandsReadPtr[ch] != commandsPtr[ch]) {
-			printCommandsBuffer(ch);
-		}
-#endif
-
+	if (cmdBuffer.hasCode()) {
+		cmdBuffer.print();
+		cmdBuffer.reset();
 	}
 }
 
@@ -224,8 +182,10 @@ ISR(TIMER0_OVF_vect) {
  */
 void initReceivers() {
 
-	DDRD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7));
-	PORTD |= ((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7));
+	DDRD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6)
+			| (1 << PD7));
+	PORTD |= ((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6)
+			| (1 << PD7));
 
 	/* Enable the pin change interrupts on these three pins corresponding to PD2, PD3, ... */
 	PCICR |= (1 << PCIE2);
@@ -240,10 +200,6 @@ void initBuffers() {
 	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 		myWord[ch] = 0;
 		bitPtr[ch] = 0;
-#ifndef USE_OOP
-		commandsPtr[ch] = 0;
-		commandsReadPtr[ch] = 0;
-#endif
 		channelStatusTimeGap[ch] = 0;
 		channelSMStatus[ch] = IDLE;
 	}
@@ -394,13 +350,8 @@ void processPortStateChange(uint8_t ptr) {
 				uint8_t cmdNeg = (uint8_t) ((myWord[ch] >> 8) & 0xFF);
 
 				if ((cmd ^ cmdNeg) == 0xFF) {
-					printStringSMDebug(" ST"); printStringSMDebug("("); printByteSMDebug(ch); printStringSMDebug("): "); printBinaryByteSMDebug(cmd); printStringSMDebug("\r\n");
-#ifdef USE_OOP
-					cmdBuffer.add(cmd,ch);
-#else
-					commands[ch][commandsPtr[ch]] = cmd;
-					commandsPtr[ch] = (commandsPtr[ch] + 1) % COMMANDS_BUFLEN;
-#endif
+					printStringSMDebug(" ST");printStringSMDebug("(");printByteSMDebug(ch);printStringSMDebug("): ");printBinaryByteSMDebug(cmd);printStringSMDebug("\r\n");
+					cmdBuffer.add(cmd, ch);
 
 					if (histogram[ch] < 255)
 						histogram[ch]++;

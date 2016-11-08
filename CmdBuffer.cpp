@@ -8,55 +8,51 @@
 #include "CmdBuffer.h"
 
 CmdBuffer::CmdBuffer() {
-	commandsPtr = 0;
-	commandsReadPtr = 0;
+	codesPtr = 0;
+	codesReadPtr = 0;
 }
 
 bool CmdBuffer::hasCode() {
-	return (commandsPtr == commandsReadPtr);
+	if (codesPtr == codesReadPtr) {
+		return false;
+	} else {
+		return true;
+	}
 }
 
 Code *CmdBuffer::getCode() {
 	Code* ret = 0;
 	if (hasCode()) {
-		ret = &(codes[commandsReadPtr]);
-		commandsReadPtr = (commandsReadPtr + 1) % COMMANDS_BUFLEN;
+		ret = &(codes[codesReadPtr]);
+		codesReadPtr = (codesReadPtr + 1) % COMMANDS_BUFLEN;
 	}
 
 	return ret;
 }
 
 bool CmdBuffer::add(uint8_t code, uint8_t ch) {
-	uint8_t writePtr = (commandsPtr + 1) % COMMANDS_BUFLEN;
-	if (writePtr == commandsReadPtr) {
-		return false;
-	} else {
-		commandsPtr = writePtr;
-		commands[commandsPtr] = code;
+	codes[codesPtr].code = code;
+	codes[codesPtr].channel = ch;
+	codesPtr = (codesPtr + 1) % COMMANDS_BUFLEN;
 
-		codes[commandsPtr].code = code;
-		codes[commandsPtr].channel = ch;
-		return true;
-	}
+	return true;
 }
 
 void CmdBuffer::reset() {
-	commandsReadPtr = commandsPtr;
+	codesReadPtr = codesPtr;
 }
 
-void CmdBuffer::print(char *prefix) {
+void CmdBuffer::print() {
+	uint8_t localReadPtr = codesReadPtr;
+	while (localReadPtr != codesPtr) {
+		Code* code = getCode();
+		printByte(code->channel);
+		printString(":");
+		printByte(code->code);
+		printString(", ");
 
-	if (prefix) {
-		printString(prefix);
-	}
-
-	uint8_t localReadPtr = commandsReadPtr;
-	while (localReadPtr != commandsPtr) {
-		printByte(commands[localReadPtr]);
-		printString(" ,");
 		localReadPtr = (localReadPtr + 1) % COMMANDS_BUFLEN;
 	}
-
 	printString("\r\n");
 }
 
