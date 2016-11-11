@@ -12,8 +12,10 @@
 
 #include "debug.h"
 #include "pindefs.h"
-#include "CmdBuffer.h"
+#include "Code.h"
 #include "Histogram.h"
+
+#include "RingBuffer.h"
 
 #if F_CPU != 8000000
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
@@ -46,11 +48,9 @@ Status channelSMStatus[8];
 uint16_t myWord[NUM_CHANNELS];
 uint8_t bitPtr[NUM_CHANNELS];
 
-/* Received commands buffer */
-
-CmdBuffer cmdBuffer;
-CmdBufferIterator cmdBufferIterator(&cmdBuffer);
-Histogram hist(&cmdBuffer);
+RingBuffer<Code,64> ringBuffer;
+RingBufferIterator<Code,64> ringBufferIterator(&ringBuffer);
+Histogram<Code,64> hist(&ringBuffer);
 
 /*
  * The NEC protocol uses pulse distance encoding of the bits. Each pulse is a 560µs
@@ -310,10 +310,13 @@ void processPortStateChange(uint8_t ptr) {
 #ifdef STORE_DATA
 				uint8_t cmd = (uint8_t) ((myWord[ch]) & 0xFF);
 				uint8_t cmdNeg = (uint8_t) ((myWord[ch] >> 8) & 0xFF);
-
+				Code c;
 				if ((cmd ^ cmdNeg) == 0xFF) {
 					printStringSMDebug(" ST");printStringSMDebug("(");printByteSMDebug(ch);printStringSMDebug("): ");printBinaryByteSMDebug(cmd);printStringSMDebug("\r\n");
-					cmdBuffer.add(cmd, ch);
+
+					c.channel = ch;
+					c.code = cmd;
+					ringBuffer.add(&c);
 				}
 
 #endif
@@ -368,7 +371,6 @@ int main() {
 	initServo();
 
 	sei();
-
 	printString("Started!\r\n");
 
 	while (true) {
@@ -376,10 +378,11 @@ int main() {
 		if (hist.updateHistogram()) {
 			hist.print();
 		}
-		cmdBufferIterator.print();
-		cmdBuffer.reset();
 
-		//TODO: Switch here to use OOP (hist, cmdBuffer).
+		ringBufferIterator.print();
+		ringBuffer.reset();
 	}
 }
+
+
 
