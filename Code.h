@@ -8,8 +8,6 @@
 #ifndef CODE_H_
 #define CODE_H_
 
-#include "USART/USART.h"
-
 class Code {
 public:
 	static const uint8_t UNDEF_CHANNEL = 255;
@@ -25,11 +23,12 @@ public:
 	}
 
 	void print() {
-		printString("(");
-		printByte(channel);
-		printString(":");
-		printByte(code);
-		printString("), ");
+		printf("(%d:%d),", channel, code);
+//		printString("(");
+//		printByte(channel);
+//		printString(":");
+//		printByte(code);
+//		printString("), ");
 	}
 
 	uint8_t code;

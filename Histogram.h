@@ -60,27 +60,24 @@ public:
 	}
 
 	void print() {
-		printString("Histogram:\r\n");
+		printf("Histogram:\r\n");
 
 		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-			printString("CH:");
-			printByte(ch);
-			printString(":");
+			printf("CH:%d:", ch);
 			for (uint8_t i = 0; i < channels[ch]; i++) {
-				printString("#");
+				printf("#");
 			}
-			printString("\r\n");
+			printf("\r\n");
 		}
 
 		if (mCh > 0) {
-			printString("Main Channels: [");
+			printf("Main Channels: [");
 			for (uint8_t ch = 0; ch < 8; ch++) {
 				if (!(mCh & (1 << ch)))
 					continue;
-				printByte(ch);
-				printString(",");
+				printf("%d,", ch);
 			}
-			printString("]\r\n");
+			printf("]\r\n");
 		}
 
 	}

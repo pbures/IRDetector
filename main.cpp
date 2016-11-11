@@ -8,7 +8,7 @@
 #include <util/delay.h>
 #include <avr/interrupt.h>
 #include <avr/power.h>
-#include "USART/USART.h"
+#include <stdio.h>
 
 #include "debug.h"
 #include "pindefs.h"
@@ -16,6 +16,10 @@
 #include "Histogram.h"
 #include "RingBuffer.h"
 #include "LEDIndicators.h"
+
+
+#include "uart.h"
+
 
 #if F_CPU != 8000000
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
@@ -64,6 +68,17 @@ Histogram<Code,64> hist(&ringBuffer);
  * A command is composed of:
  * <|||9ms|||_4.5ms_><<LSBaddr1><MSBaddr1>><<LSBaddr2><MSBaddr2>><<LSBcmd1....>
  */
+
+
+static int uart_putchar(char c, FILE *stream);
+static FILE mystdout = {0};
+
+
+// http://www.nongnu.org/avr-libc/user-manual/group__avr__stdio.html
+static int uart_putchar(char c, FILE *stream) {
+	txByte(c);
+	return 0;
+};
 
 inline void resetTime() {
 	timerReg = TCNT0;
@@ -361,7 +376,11 @@ int main() {
 	DBGLED(ALL, 0);
 #endif
 
-	initUSART();
+	initUart();
+
+	fdev_setup_stream(&mystdout, uart_putchar, NULL, _FDEV_SETUP_WRITE);
+	stdout = &mystdout;
+
 	/*
 	 IRInit();
 	 */
@@ -371,7 +390,7 @@ int main() {
 	initServo();
 
 	sei();
-	printString("Started!\r\n");
+	printf("Started!\r\n");
 
 	while (true) {
 		processPortStateChanges();

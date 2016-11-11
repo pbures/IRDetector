@@ -8,6 +8,8 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
 
+#define BAUD 19200
+
 #define DEBUG_LEDS
 //#define DEBUG_STATE_MACHINE
 #define STORE_DATA
