@@ -19,7 +19,7 @@ class Histogram {
 
 public:
 	Histogram(RingBuffer<Code, MAXSIZE> *buffer) :
-			buffer(buffer), numMainChannels(0) {
+			buffer(buffer) {
 		reset();
 	}
 
@@ -46,18 +46,17 @@ public:
 			mainChannel = max(mainChannel, channels[ch]);
 		}
 
-		numMainChannels = 0;
+		mCh = 0;
 		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-			if (channels[ch] == mainChannel) {
-				mainChannels[numMainChannels++] = ch;
-			}
+			if (channels[ch] == mainChannel)
+				mCh |= (1 << ch);
 		}
 
 		return true;
 	}
 
-	uint8_t* getMainChannels() {
-		return mainChannels;
+	uint8_t getMainChannels() {
+		return mCh;
 	}
 
 	void print() {
@@ -73,10 +72,12 @@ public:
 			printString("\r\n");
 		}
 
-		if (numMainChannels > 0) {
+		if (mCh > 0) {
 			printString("Main Channels: [");
-			for (uint8_t ch = 0; ch < numMainChannels; ch++) {
-				printByte(mainChannels[ch]);
+			for (uint8_t ch = 0; ch < 8; ch++) {
+				if (!(mCh & (1 << ch)))
+					continue;
+				printByte(ch);
 				printString(",");
 			}
 			printString("]\r\n");
@@ -88,6 +89,7 @@ private:
 	void reset() {
 		for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 			channels[ch] = 0;
+			mCh = 0;
 		}
 	}
 
@@ -100,8 +102,7 @@ private:
 	}
 
 	RingBuffer<Code, MAXSIZE>* buffer;
-	uint8_t numMainChannels;
-	uint8_t mainChannels[NUM_CHANNELS];
+	uint8_t mCh;
 	uint8_t channels[NUM_CHANNELS];
 };
 

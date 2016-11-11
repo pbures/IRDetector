@@ -14,8 +14,8 @@
 #include "pindefs.h"
 #include "Code.h"
 #include "Histogram.h"
-
 #include "RingBuffer.h"
+#include "LEDIndicators.h"
 
 #if F_CPU != 8000000
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
@@ -377,6 +377,7 @@ int main() {
 		processPortStateChanges();
 		if (hist.updateHistogram()) {
 			hist.print();
+			LEDIndicators::setLeds(hist.getMainChannels());
 		}
 
 		ringBufferIterator.print();

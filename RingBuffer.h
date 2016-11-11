@@ -36,6 +36,10 @@ public:
 		newValues = false;
 	}
 
+	T& last() {
+		return &(values[valuesPtr]);
+	}
+
 	T values[MAXSIZE];
 	uint8_t valuesPtr;
 
