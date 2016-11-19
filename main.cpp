@@ -2,25 +2,24 @@
  *  Created on: 11. 10. 2016
  *      Author: Pavel Bures
  */
+#include "config.h"
+
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
 #include <avr/power.h>
-#include "USART/USART.h"
+#include <stdio.h>
 
-#define DEBUG_LEDS
-//#define DEBUG_STATE_MACHINE
-#define STORE_DATA
-#define PRINT_COMMANDS
-#define PRINT_HISTOGRAM
-
-#define NUM_CHANNELS 6
-#define FIRST_CHANNEL 2
-#define NUM_READINGS 256
-#define COMMANDS_BUFLEN 16
-
-#include "pindefs.h"
 #include "debug.h"
+#include "pindefs.h"
+#include "Code.h"
+#include "Histogram.h"
+#include "RingBuffer.h"
+#include "LEDIndicators.h"
+
+
+#include "uart.h"
+
 
 #if F_CPU != 8000000
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
@@ -53,51 +52,9 @@ Status channelSMStatus[8];
 uint16_t myWord[NUM_CHANNELS];
 uint8_t bitPtr[NUM_CHANNELS];
 
-/* Received commands buffer */
-uint8_t volatile commands[NUM_CHANNELS][COMMANDS_BUFLEN];
-uint8_t volatile commandsPtr[NUM_CHANNELS];
-uint8_t volatile commandsReadPtr[NUM_CHANNELS];
-
-/* Histogram data */
-uint8_t histogram[NUM_CHANNELS];
-uint8_t maxChannels;
-uint8_t prevMaxChannels;
-
-void printCommandsBuffer(uint8_t ch) {
-#ifdef PRINT_COMMANDS
-	printString("CH:");
-	printByte(ch);
-	printString("=");
-	while (commandsReadPtr[ch] != commandsPtr[ch]) {
-		printByte(commands[ch][commandsReadPtr[ch]]);
-
-		//TODO: Put this somewhere else later on!
-		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 12)) {
-			OCR1A = 600;
-		};
-		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 94)) {
-			OCR1A = 2500;
-		}
-		if ((ch == 0) && (commands[ch][commandsReadPtr[ch]] == 24)) {
-					OCR1A = 1500;
-				}
-
-		printString(" ,");
-		commandsReadPtr[ch] = (commandsReadPtr[ch] + 1) % COMMANDS_BUFLEN;
-	}
-	printString("\r\n");
-#else
-	commandsReadPtr[ch] = commandsPtr[ch];
-#endif
-}
-
-void printCommandsBuffers() {
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-		if (commandsReadPtr[ch] != commandsPtr[ch]) {
-			printCommandsBuffer(ch);
-		}
-	}
-}
+RingBuffer<Code,64> ringBuffer;
+RingBufferIterator<Code,64> ringBufferIterator(&ringBuffer);
+Histogram<Code,64> hist(&ringBuffer);
 
 /*
  * The NEC protocol uses pulse distance encoding of the bits. Each pulse is a 560µs
@@ -112,6 +69,17 @@ void printCommandsBuffers() {
  * <|||9ms|||_4.5ms_><<LSBaddr1><MSBaddr1>><<LSBaddr2><MSBaddr2>><<LSBcmd1....>
  */
 
+
+static int uart_putchar(char c, FILE *stream);
+static FILE mystdout = {0};
+
+
+// http://www.nongnu.org/avr-libc/user-manual/group__avr__stdio.html
+static int uart_putchar(char c, FILE *stream) {
+	txByte(c);
+	return 0;
+};
+
 inline void resetTime() {
 	timerReg = TCNT0;
 	timerOverflowCnt = 0;
@@ -121,34 +89,6 @@ inline void resetTime() {
 	}
 }
 
-uint8_t updateHistogramValues() {
-	uint8_t minChannelValue = 255;
-	uint8_t maxChannelValue = 0;
-	uint8_t maxChannels = 0;
-
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-		minChannelValue =
-				(histogram[ch] < minChannelValue) ?
-						histogram[ch] : minChannelValue;
-		maxChannelValue =
-				(histogram[ch] > maxChannelValue) ?
-						histogram[ch] : maxChannelValue;
-	}
-
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-		if (maxChannelValue > 0 && histogram[ch] == maxChannelValue)
-			maxChannels |= (1 << ch);
-		histogram[ch] = histogram[ch] - minChannelValue;
-	}
-
-	return maxChannels;
-}
-
-inline void printHistogram() {
-	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++)
-		transmitByte((char) ('0' + histogram[NUM_CHANNELS - ch - 1]));
-	printString("\r\n");
-}
 
 ISR(PCINT2_vect) {
 
@@ -219,8 +159,10 @@ ISR(TIMER0_OVF_vect) {
  */
 void initReceivers() {
 
-	DDRD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7));
-	PORTD |= ((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6) | (1 << PD7));
+	DDRD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6)
+			| (1 << PD7));
+	PORTD |= ((1 << PD2) | (1 << PD3) | (1 << PD4) | (1 << PD5) | (1 << PD6)
+			| (1 << PD7));
 
 	/* Enable the pin change interrupts on these three pins corresponding to PD2, PD3, ... */
 	PCICR |= (1 << PCIE2);
@@ -235,9 +177,6 @@ void initBuffers() {
 	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
 		myWord[ch] = 0;
 		bitPtr[ch] = 0;
-		commandsPtr[ch] = 0;
-		commandsReadPtr[ch] = 0;
-
 		channelStatusTimeGap[ch] = 0;
 		channelSMStatus[ch] = IDLE;
 	}
@@ -386,14 +325,13 @@ void processPortStateChange(uint8_t ptr) {
 #ifdef STORE_DATA
 				uint8_t cmd = (uint8_t) ((myWord[ch]) & 0xFF);
 				uint8_t cmdNeg = (uint8_t) ((myWord[ch] >> 8) & 0xFF);
-
+				Code c;
 				if ((cmd ^ cmdNeg) == 0xFF) {
-					printStringSMDebug(" ST"); printStringSMDebug("("); printByteSMDebug(ch); printStringSMDebug("): "); printBinaryByteSMDebug(cmd); printStringSMDebug("\r\n");
+					printStringSMDebug(" ST");printStringSMDebug("(");printByteSMDebug(ch);printStringSMDebug("): ");printBinaryByteSMDebug(cmd);printStringSMDebug("\r\n");
 
-					commands[ch][commandsPtr[ch]] = cmd;
-					commandsPtr[ch] = (commandsPtr[ch] + 1) % COMMANDS_BUFLEN;
-					if (histogram[ch] < 255)
-						histogram[ch]++;
+					c.channel = ch;
+					c.code = cmd;
+					ringBuffer.add(&c);
 				}
 
 #endif
@@ -438,7 +376,11 @@ int main() {
 	DBGLED(ALL, 0);
 #endif
 
-	initUSART();
+	initUart();
+
+	fdev_setup_stream(&mystdout, uart_putchar, NULL, _FDEV_SETUP_WRITE);
+	stdout = &mystdout;
+
 	/*
 	 IRInit();
 	 */
@@ -446,14 +388,31 @@ int main() {
 	initReceivers();
 	initBuffers();
 	initServo();
+	LEDIndicators::init();
+
+	for (uint8_t i=0; i< (3*6); i++) {
+		LEDIndicators::setLeds(2<<(i % 6));
+		_delay_ms(50);
+		LEDIndicators::setLeds(0);
+		_delay_ms(50);
+	}
+
+	LEDIndicators::setLeds(0);
 
 	sei();
-
-	printString("Started!\r\n");
+	printf("Started!\r\n");
 
 	while (true) {
 		processPortStateChanges();
-		printCommandsBuffers();
+		if (hist.updateHistogram()) {
+			hist.print();
+			LEDIndicators::setLeds(hist.getMainChannels() << 1);
+		}
+
+		ringBufferIterator.print();
+		ringBuffer.reset();
 	}
 }
+
+
 
