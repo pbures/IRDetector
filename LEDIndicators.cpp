@@ -17,11 +17,10 @@ void LEDIndicators::init() {
 void LEDIndicators::setLeds(uint8_t leds) {
 
 	SET_LOW(SR_PORT, SR_LAT);
-	SET_LOW(SR_PORT, SR_CLK);
-	SET_LOW(SR_PORT, SR_OE);
+	SET_HIGH(SR_PORT, SR_OE);
 
 	for(uint8_t l=0;l<8;l++) {
-		if (leds & (1<<l)) {
+		if (leds & (1<<(7-l))) {
 			SET_HIGH(SR_PORT, SR_DTA);
 		} else {
 			SET_LOW(SR_PORT, SR_DTA);
@@ -32,6 +31,7 @@ void LEDIndicators::setLeds(uint8_t leds) {
 	}
 
 	SET_HIGH(SR_PORT, SR_LAT);
+	SET_LOW(SR_PORT, SR_OE);
 }
 // TODO Auto-generated constructor stub
 

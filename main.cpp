@@ -388,6 +388,16 @@ int main() {
 	initReceivers();
 	initBuffers();
 	initServo();
+	LEDIndicators::init();
+
+	for (uint8_t i=0; i< (3*6); i++) {
+		LEDIndicators::setLeds(2<<(i % 6));
+		_delay_ms(50);
+		LEDIndicators::setLeds(0);
+		_delay_ms(50);
+	}
+
+	LEDIndicators::setLeds(0);
 
 	sei();
 	printf("Started!\r\n");
@@ -396,7 +406,7 @@ int main() {
 		processPortStateChanges();
 		if (hist.updateHistogram()) {
 			hist.print();
-			LEDIndicators::setLeds(hist.getMainChannels());
+			LEDIndicators::setLeds(hist.getMainChannels() << 1);
 		}
 
 		ringBufferIterator.print();
