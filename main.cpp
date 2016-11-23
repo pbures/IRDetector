@@ -16,10 +16,9 @@
 #include "Histogram.h"
 #include "RingBuffer.h"
 #include "LEDIndicators.h"
-
+#include "IRTransciever.h"
 
 #include "uart.h"
-
 
 #if F_CPU != 8000000
 #error "Please run the atmega chip at 8Mhz to reach the right timing."
@@ -34,9 +33,16 @@ enum Status {
 };
 
 /* Timer variables */
-#define TIMER_MAX 256 //65535
-int8_t volatile timerOverflowCnt;
-uint16_t volatile timerReg;
+#ifdef USE_TIMER0
+#define TIMER_MAX 256
+int8_t volatile timer0OverflowCnt;
+uint16_t volatile timerReg0;
+#else
+#define TIMER_MAX 65535
+int8_t volatile timer1OverflowCnt;
+uint16_t volatile timerReg1;
+#endif
+
 volatile uint8_t started = 0;
 
 /* Buffer for BANK C changes */
@@ -52,9 +58,9 @@ Status channelSMStatus[8];
 uint16_t myWord[NUM_CHANNELS];
 uint8_t bitPtr[NUM_CHANNELS];
 
-RingBuffer<Code,64> ringBuffer;
-RingBufferIterator<Code,64> ringBufferIterator(&ringBuffer);
-Histogram<Code,64> hist(&ringBuffer);
+RingBuffer<Code, 64> ringBuffer;
+RingBufferIterator<Code, 64> ringBufferIterator(&ringBuffer);
+Histogram<Code, 64> hist(&ringBuffer);
 
 /*
  * The NEC protocol uses pulse distance encoding of the bits. Each pulse is a 560µs
@@ -69,26 +75,33 @@ Histogram<Code,64> hist(&ringBuffer);
  * <|||9ms|||_4.5ms_><<LSBaddr1><MSBaddr1>><<LSBaddr2><MSBaddr2>><<LSBcmd1....>
  */
 
-
 static int uart_putchar(char c, FILE *stream);
 static FILE mystdout = {0};
-
 
 // http://www.nongnu.org/avr-libc/user-manual/group__avr__stdio.html
 static int uart_putchar(char c, FILE *stream) {
 	txByte(c);
 	return 0;
-};
+}
+;
 
 inline void resetTime() {
-	timerReg = TCNT0;
-	timerOverflowCnt = 0;
+#ifdef USE_TIMER0
+	timerReg0 = TCNT0;
+	timer0OverflowCnt = 0;
 	if (TIFR0 & (1 << TOV0)) {
-		timerReg = TCNT0;
-		timerOverflowCnt = -1;
+		timerReg0 = TCNT0;
+		timer0OverflowCnt = -1;
 	}
+#else
+	timerReg1 = TCNT1;
+	timer1OverflowCnt = 0;
+	if (TIFR1 & (1 << TOV1)) {
+		timerReg1 = TCNT1;
+		timer1OverflowCnt = -1;
+	}
+#endif
 }
-
 
 ISR(PCINT2_vect) {
 
@@ -97,9 +110,10 @@ ISR(PCINT2_vect) {
 	DBGLED(RCVLED1, 1);
 #endif
 
+#ifdef USE_TIMER0
 	/* Get the number of ticks, overflows on the counter and reset the counter. */
 	uint16_t ticks = TCNT0;
-	uint8_t overflows = timerOverflowCnt;
+	uint8_t overflows = timer0OverflowCnt;
 
 	if (TIFR0 & (1 << TOV0)) { /* We have just encountered timer overflow. Overflows counters are not updated however. */
 		ticks = TCNT0;
@@ -108,8 +122,24 @@ ISR(PCINT2_vect) {
 
 	/* Compute the time in units of 64 microseconds. We are running 8MhZ and clock prescaler is set to 256, and divide by two
 	 so we fit into uint16_t in case we have overflows equal to 1. 64us is the timeUs resolution. */
-	uint16_t timeUs = ((overflows * TIMER_MAX / 2) + (ticks >> 1)
-			- (timerReg >> 1));
+	uint16_t timeUs = ((overflows * 256 / 2) + (ticks >> 1)
+			- (timerReg0 >> 1));
+#else
+	/* Get the number of ticks, overflows on the counter and reset the counter. */
+	uint16_t ticks = TCNT1;
+	uint8_t overflows = timer1OverflowCnt;
+
+	if (TIFR1 & (1 << TOV1)) { /* We have just encountered timer overflow. Overflows counters are not updated however. */
+		ticks = TCNT1;
+		overflows++;
+	}
+
+	/* Compute the time in units of 64 microseconds. We are running 8MhZ and clock prescaler is set to 256, and divide by two
+	 so we fit into uint16_t in case we have overflows equal to 1. 64us is the timeUs resolution. */
+	uint16_t timeUs =
+			((overflows * 65536 / 2) + (ticks >> 1) - (timerReg1 >> 1));
+#endif
+
 	resetTime();
 
 	if (pind != portStatus[portStatusPtr]) {
@@ -125,34 +155,26 @@ ISR(PCINT2_vect) {
 #endif
 }
 
+#ifdef USE_TIMER0
 /* Count number of timer overflows, this tells us how many cycles passed */
 ISR(TIMER0_OVF_vect) {
 	/* We are fine to count up to two overflows. Moreover, if we keep it this low, the numner of
 	 * microseconds can be stored in uint16_t which saves us some time in ISR.
 	 */
-	if (timerOverflowCnt < 254)
-		timerOverflowCnt++;
+	if (timer0OverflowCnt < 254)
+	timer0OverflowCnt++;
 	TCNT0 = 0;
 }
-
-/*
- void IROn() {
- OCR0A = 105; // 8Mhz / 38 Khz. Blink every 210th tick, it is 105th up, 210th down. The time of one blink is 26us.
- TRC_DDR |= (1 << TRC_BIT);
- }
-
- void IROff() {
- TRC_DDR &= ~(1 << TRC_BIT);
- }
-
- void IRInit() {
- SET_OUTPUT_MODE(TRC_DDR, TRC_BIT);
- IROff();
- TCCR0A |= (1 << WGM01); // CTC Mode
- TCCR0A |= (1 << COM0A0); // Toggle PD6 on cycle through
- TCCR0B |= (1 << CS00); // Prescaler to 1
- }
- */
+#else
+ISR(TIMER1_OVF_vect) {
+	/* We are fine to count up to two overflows. Moreover, if we keep it this low, the numner of
+	 * microseconds can be stored in uint16_t which saves us some time in ISR.
+	 */
+	if (timer1OverflowCnt < 254)
+		timer1OverflowCnt++;
+	TCNT1 = 0;
+}
+#endif
 
 /*
  * Initialize receivers on pins D, PD2, PD3, ....
@@ -184,13 +206,20 @@ void initBuffers() {
 }
 
 inline void initTimer() {
+#ifdef USE_TIMER0
 	TCNT0 = 0;
 	TCCR0A = 0;
 	TCCR0B = ((1 << CS02) /* | (1 << CS00) | (1 << CS01) */); /* Prescaler set to 256 */
 	TIMSK0 = (1 << TOIE0);
-
-	timerOverflowCnt = 0;
-	timerReg = 0;
+	timer0OverflowCnt = 0;
+	timerReg0 = 0;
+#else
+	TCNT1 = 0;
+	TCCR1B |= ((1 << CS12) /* | (1 << CS10) | (1 << CS11) */); /* Prescaler set to 256 */
+	TIMSK1 |= (1 << TOIE1);
+	timer1OverflowCnt = 0;
+	timerReg1 = 0;
+#endif
 }
 
 void initServo() {
@@ -204,9 +233,6 @@ void initServo() {
 	DDRB |= (1 << PB1);
 
 	OCR1A = 1500;
-
-	DDRB |= (1 << PB1);
-
 }
 
 void processPortStateChange(uint8_t ptr) {
@@ -220,7 +246,11 @@ void processPortStateChange(uint8_t ptr) {
 
 	for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) { /* Let us start with single channel */
 		uint8_t lo2hi = 0;
-		printStringSMDebug("\r\nch:[");printByteSMDebug(ch);printStringSMDebug("]");
+
+#ifdef DEBUG_STATE_MACHINE
+		printf("\r\nch:[%i]", ch);
+#endif
+
 		if ((portState ^ channelStatusLast) & (1 << (ch + FIRST_CHANNEL))) {
 
 			if (portState & (1 << (ch + FIRST_CHANNEL))) {
@@ -228,32 +258,44 @@ void processPortStateChange(uint8_t ptr) {
 			}
 
 			/* If there was a change on the given channel */
+#ifdef DEBUG_STATE_MACHINE
 			if (lo2hi) {
-				printStringSMDebug("LOHI");
+				printf("LOHI");
 			} else {
-				printStringSMDebug("HILO");
+				printf("HILO");
 			}
+#endif
 
 			TimeGap timeGap;
 			uint8_t gap = channelStatusTimeGap[ch];
-			printStringSMDebug(" In: ");
-
+#ifdef DEBUG_STATE_MACHINE
+			printf(" In: %d ", gap);
+#endif
 			if (gap < 900 / 64) {
 				timeGap = G0P5MS;
-				printStringSMDebug(" G0P5MS");
+#ifdef DEBUG_STATE_MACHINE
+				printf(" G0P5MS");
+#endif
 			} else if (gap < 4400 / 64) {
 				timeGap = G1P2MS;
-				printStringSMDebug(" G1P2MS");
+#ifdef DEBUG_STATE_MACHINE
+				printf(" G1P2MS");
+#endif
 			} else if (gap < 8900 / 64) {
 				timeGap = G4P5MS;
-				printStringSMDebug(" G4P5MS");
+#ifdef DEBUG_STATE_MACHINE
+				printf(" G4P5MS");
+#endif
 			} else {
 				timeGap = G9P0MS;
-				printStringSMDebug(" G9P0MS");
+#ifdef DEBUG_STATE_MACHINE
+				printf(" G9P0MS");
+#endif
 			}
 
-			printStringSMDebug(" (");printByteSMDebug(gap);printStringSMDebug(")");
-
+#ifdef DEBUG_STATE_MACHINE
+			printf(" (%d)", gap);
+#endif
 			switch (channelSMStatus[ch]) {
 			case IDLE:
 				if (lo2hi) {
@@ -300,8 +342,9 @@ void processPortStateChange(uint8_t ptr) {
 						printStringSMDebug(" RECV->BURST");
 					} else {
 						channelSMStatus[ch] = RECV;
-						printStringSMDebug(" RECV->RECV");printStringSMDebug(" b:");printByteSMDebug(bitPtr[ch]);
-
+#ifdef DEBUG_STATE_MACHINE
+						printf(" RECV->RECV b:%d", bitPtr[ch]);
+#endif
 						if (timeGap >= G1P2MS) {
 #ifdef STORE_DATA
 							if (bitPtr[ch] > 15)
@@ -327,8 +370,9 @@ void processPortStateChange(uint8_t ptr) {
 				uint8_t cmdNeg = (uint8_t) ((myWord[ch] >> 8) & 0xFF);
 				Code c;
 				if ((cmd ^ cmdNeg) == 0xFF) {
-					printStringSMDebug(" ST");printStringSMDebug("(");printByteSMDebug(ch);printStringSMDebug("): ");printBinaryByteSMDebug(cmd);printStringSMDebug("\r\n");
-
+#ifdef DEBUG_STATE_MACHINE
+					printf(" ST(%d): %d\r\n",ch, cmd);
+#endif
 					c.channel = ch;
 					c.code = cmd;
 					ringBuffer.add(&c);
@@ -387,11 +431,15 @@ int main() {
 	initTimer();
 	initReceivers();
 	initBuffers();
-	initServo();
+	//initServo();
 	LEDIndicators::init();
 
-	for (uint8_t i=0; i< (3*6); i++) {
-		LEDIndicators::setLeds(2<<(i % 6));
+	IRTransciever::init();
+	//TODO: Find out why this below does not work and stuck the controller.
+//	IRTransciever::IROn();
+
+	for (uint8_t i = 0; i < (3 * 6); i++) {
+		LEDIndicators::setLeds(2 << (i % 6));
 		_delay_ms(50);
 		LEDIndicators::setLeds(0);
 		_delay_ms(50);
@@ -405,14 +453,15 @@ int main() {
 	while (true) {
 		processPortStateChanges();
 		if (hist.updateHistogram()) {
+
 			hist.print();
 			LEDIndicators::setLeds(hist.getMainChannels() << 1);
+			//IRTransciever::send('a');
 		}
 
 		ringBufferIterator.print();
 		ringBuffer.reset();
+
 	}
 }
-
-
 

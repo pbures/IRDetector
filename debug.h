@@ -4,13 +4,9 @@
 #include "pindefs.h"
 
 #ifdef DEBUG_STATE_MACHINE
-#define printStringSMDebug(a) printString(a)
-#define printByteSMDebug(a) printByte(a)
-#define printBinaryByteSMDebug(a) printBinaryByte(a)
+#define printStringSMDebug(a) printf(a)
 #else
 #define printStringSMDebug(a)
-#define printByteSMDebug(a)
-#define printBinaryByteSMDebug(a)
 #endif
 
 #ifdef DEBUG_LEDS

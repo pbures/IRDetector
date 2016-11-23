@@ -24,11 +24,6 @@ public:
 
 	void print() {
 		printf("(%d:%d),", channel, code);
-//		printString("(");
-//		printByte(channel);
-//		printString(":");
-//		printByte(code);
-//		printString("), ");
 	}
 
 	uint8_t code;

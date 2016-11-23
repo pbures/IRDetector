@@ -15,6 +15,7 @@
 #define STORE_DATA
 #define PRINT_COMMANDS
 #define PRINT_HISTOGRAM
+//#define USE_TIMER0 //Default is Timer 1.
 
 #define NUM_CHANNELS 6
 #define FIRST_CHANNEL 2
